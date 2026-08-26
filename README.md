@@ -95,6 +95,23 @@ actually played end to end. HDMI audio is unverified (no display was attached).
 The NESPi 4's SATA bridge needed a UAS quirk, which the installer now applies
 automatically — see the findings document.
 
+## Phone-only administration
+
+The box is meant to travel with nothing but a phone, so the things that
+normally need a screen and a keyboard are web pages, all gated by the admin PIN:
+
+| Page | What it does |
+|---|---|
+| `/beatify/admin` | Beatify's own host UI (upstream, unmodified) |
+| `/beatify/wifi` | Scan and join a network — how the box gets onto a venue's Wi-Fi |
+| `/beatify/bluetooth` | Pair a game controller, so no USB cable is needed |
+
+It also listens on **port 80** alongside 8123. That is not cosmetic: browsers
+upgrade typed addresses to HTTPS, and on 8123 that upgrade reaches this same
+server, which answers a TLS handshake with plaintext — the browser reports a
+protocol error rather than falling back. On port 80 the upgrade goes to 443,
+where nothing listens, so the fallback to HTTP is clean.
+
 ## Setup on Batocera
 
 Batocera's root filesystem is a read-only SquashFS; only `/userdata` persists.

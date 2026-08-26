@@ -17,6 +17,7 @@ from typing import Any
 from aiohttp import web
 
 from .auth import AuthManager, register_auth_routes
+from .bluetooth_setup import register_bluetooth_routes
 from .config import Config
 from .librespot import LibrespotSupervisor
 from .media_player_driver import MediaPlayerDriver
@@ -79,6 +80,7 @@ class Application:
 
         register_auth_routes(self.app, self.auth)
         register_wifi_routes(self.app, self.auth, self.config.port)
+        register_bluetooth_routes(self.app, self.auth)
         self._register_spotify_routes()
 
         # librespot first: the Connect device needs to exist before the driver

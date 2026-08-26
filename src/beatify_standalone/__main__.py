@@ -49,8 +49,26 @@ async def _run(config: Config) -> None:
 
     runner = web.AppRunner(app)
     await runner.setup()
-    site = web.TCPSite(runner, config.host, config.port)
-    await site.start()
+    await web.TCPSite(runner, config.host, config.port).start()
+
+    if config.extra_port and config.extra_port != config.port:
+        # Best effort: needs root, and the port may already be taken. Failing
+        # here is not fatal — the main port still works, typing the address just
+        # gets harder on browsers that force HTTPS.
+        try:
+            await web.TCPSite(runner, config.host, config.extra_port).start()
+            logging.getLogger(__name__).info(
+                "also listening on port %s, so http:// addresses survive a "
+                "browser's HTTPS upgrade",
+                config.extra_port,
+            )
+        except OSError as err:
+            logging.getLogger(__name__).warning(
+                "could not listen on port %s (%s) — typed http:// addresses may "
+                "be force-upgraded to HTTPS by the browser",
+                config.extra_port,
+                err,
+            )
 
     stop = asyncio.Event()
     loop = asyncio.get_running_loop()

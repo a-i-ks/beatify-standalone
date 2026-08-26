@@ -23,6 +23,13 @@ class Config:
     data_dir: Path
     port: int = 8123
     host: str = "0.0.0.0"  # noqa: S104 - a party box must be reachable from the LAN
+    # A second listener on the default HTTP port. Browsers now try to upgrade a
+    # typed address to HTTPS; on port 8123 that upgrade reaches this very server,
+    # which answers a TLS handshake with plaintext, and the browser reports a
+    # protocol error instead of falling back. Port 80's upgrade goes to 443,
+    # where nothing is listening, so the fallback to HTTP is clean.
+    # Set to null to disable.
+    extra_port: int | None = 80
     country: str | None = "DE"
 
     # Spotify application credentials (Developer Dashboard). The client secret
@@ -66,6 +73,8 @@ class Config:
         config = cls(
             data_dir=resolved,
             port=int(raw.get("port", 8123)),
+            extra_port=(None if raw.get("extra_port", 80) in (None, 0, "")
+                        else int(raw.get("extra_port", 80))),
             host=raw.get("host", "0.0.0.0"),  # noqa: S104 - see field default
             country=raw.get("country", "DE"),
             spotify_client_id=raw.get("spotify_client_id"),
@@ -99,6 +108,7 @@ class Config:
     def save(self) -> None:
         payload = {
             "port": self.port,
+            "extra_port": self.extra_port,
             "host": self.host,
             "country": self.country,
             "spotify_client_id": self.spotify_client_id,
