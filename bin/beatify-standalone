@@ -1,0 +1,21 @@
+#!/usr/bin/env python3
+"""Launcher: puts the shim and vendored upstream on the path, then runs.
+
+Kept as a script rather than a console-entry-point so the Batocera service can
+invoke it with an absolute interpreter path and no install step.
+"""
+
+from __future__ import annotations
+
+import sys
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parent.parent
+# The shim's `homeassistant` package must win over anything else on the path.
+sys.path.insert(0, str(ROOT / "vendor"))
+sys.path.insert(0, str(ROOT / "src"))
+
+from beatify_standalone.__main__ import main  # noqa: E402
+
+if __name__ == "__main__":
+    sys.exit(main())

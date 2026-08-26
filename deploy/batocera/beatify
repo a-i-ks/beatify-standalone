@@ -1,0 +1,70 @@
+#!/bin/sh
+# Batocera service: /userdata/system/services/beatify
+#
+# Batocera v38+ calls services in this directory with start/stop/restart/status.
+# Enable it once with:  batocera-services enable beatify
+#
+# Must have LF line endings — a CRLF script silently never launches.
+
+PREFIX=/userdata/beatify
+PYTHON="$PREFIX/python/bin/python3"
+LAUNCHER="$PREFIX/app/bin/beatify-standalone"
+DATA_DIR="$PREFIX/data"
+LOGFILE="$PREFIX/beatify.log"
+PIDFILE="/var/run/beatify.pid"
+
+start() {
+    if status >/dev/null 2>&1; then
+        echo "beatify already running"
+        return 0
+    fi
+    [ -x "$PYTHON" ] || { echo "missing python bundle: $PYTHON"; return 1; }
+    [ -f "$LAUNCHER" ] || { echo "missing launcher: $LAUNCHER"; return 1; }
+
+    # PATH so the launcher can find go-librespot when the config uses a bare name.
+    # XDG_RUNTIME_DIR so the PipeWire ALSA bridge is reachable: Batocera 43 runs
+    # PipeWire, and without this go-librespot's "default" device fails with
+    # "Host is down". Going through PipeWire also means the Connect daemon and
+    # EmulationStation are not fighting over an exclusive ALSA device.
+    #
+    # stdout goes to /dev/null on purpose - the app writes $LOGFILE itself, and
+    # redirecting here as well would duplicate every line.
+    PATH="$PREFIX/bin:$PATH" XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-/var/run}" \
+    "$PYTHON" "$LAUNCHER" --data-dir "$DATA_DIR" --log-file "$LOGFILE" >/dev/null 2>&1 &
+    echo $! > "$PIDFILE"
+    echo "beatify started (pid $(cat "$PIDFILE"))"
+}
+
+stop() {
+    [ -f "$PIDFILE" ] || { echo "beatify not running"; return 0; }
+    PID=$(cat "$PIDFILE")
+    # SIGTERM: the app shuts the Connect daemon down and closes its sockets.
+    kill "$PID" 2>/dev/null
+    for _ in 1 2 3 4 5 6 7 8 9 10; do
+        kill -0 "$PID" 2>/dev/null || break
+        sleep 1
+    done
+    kill -0 "$PID" 2>/dev/null && kill -9 "$PID" 2>/dev/null
+    rm -f "$PIDFILE"
+    echo "beatify stopped"
+}
+
+status() {
+    [ -f "$PIDFILE" ] || { echo "stopped"; return 1; }
+    PID=$(cat "$PIDFILE")
+    if kill -0 "$PID" 2>/dev/null; then
+        echo "running (pid $PID)"
+        return 0
+    fi
+    rm -f "$PIDFILE"
+    echo "stopped (stale pidfile)"
+    return 1
+}
+
+case "$1" in
+    start)   start ;;
+    stop)    stop ;;
+    restart) stop; start ;;
+    status)  status ;;
+    *)       echo "usage: $0 {start|stop|restart|status}"; exit 1 ;;
+esac

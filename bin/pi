@@ -1,0 +1,18 @@
+#!/usr/bin/env bash
+# ssh/scp wrapper for the Batocera box, so the key and host options live in one
+# place. Host can be overridden with BEATIFY_PI (ip or name).
+#
+#   bin/pi <command...>      run a command on the Pi
+#   bin/pi --copy SRC DST    scp a file to the Pi
+set -euo pipefail
+PI="${BEATIFY_PI:-BATOCERA.local}"
+KEY="${BEATIFY_PI_KEY:-$HOME/.ssh/beatify_pi}"
+OPTS=(-i "$KEY"
+      -o StrictHostKeyChecking=accept-new
+      -o UserKnownHostsFile="$HOME/.ssh/known_hosts_beatify"
+      -o ConnectTimeout=10
+      -o ServerAliveInterval=15)
+if [ "${1:-}" = "--copy" ]; then
+    shift; exec scp "${OPTS[@]}" "$1" "root@${PI}:$2"
+fi
+exec ssh "${OPTS[@]}" "root@${PI}" "$@"

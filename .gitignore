@@ -1,0 +1,9 @@
+.venv/
+data/
+__pycache__/
+*.pyc
+.pytest_cache/
+
+# Session-local artefacts that must never be published
+*.tar.gz
+known_hosts_beatify

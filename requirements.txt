@@ -1,0 +1,5 @@
+# Runtime dependencies of the standalone build.
+# aiohttp: upstream's HTTP/WebSocket layer (HA supplies it in a normal install).
+# num2words: declared by upstream's manifest.json requirements.
+aiohttp>=3.9
+num2words==0.5.14

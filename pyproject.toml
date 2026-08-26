@@ -1,0 +1,10 @@
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+filterwarnings = ["ignore::DeprecationWarning"]
+
+[tool.ruff]
+line-length = 100
+src = ["src", "tools"]
+# vendor/ is upstream's code, deliberately unmodified — never lint or format it.
+exclude = ["vendor", ".venv"]
