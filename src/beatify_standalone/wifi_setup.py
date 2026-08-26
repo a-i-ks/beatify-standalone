@@ -27,6 +27,8 @@ from typing import Any
 
 from aiohttp import web
 
+from .webui import message, page
+
 _LOGGER = logging.getLogger(__name__)
 
 # Slot 3 by default: never clobber home (1) or the hotspot (2).
@@ -134,108 +136,102 @@ async def apply_network(ssid: str, password: str, slot: int = DEFAULT_SLOT) -> t
     return True, f"Saved and applied.{suffix}"
 
 
-_PAGE = """<!doctype html>
-<html lang="de"><head><meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Beatify - WLAN</title>
-<style>
-  :root {{ color-scheme: light dark; }}
-  * {{ box-sizing: border-box; }}
-  body {{ font-family: -apple-system, system-ui, sans-serif; margin: 0;
-         background: #12121a; color: #f2f2f7; padding: 1.5rem 1rem 3rem; }}
-  main {{ max-width: 30rem; margin: 0 auto; }}
-  h1 {{ font-size: 1.3rem; margin: 0 0 .25rem; }}
-  p.sub {{ color: #a0a0b0; font-size: .9rem; margin: 0 0 1.5rem; }}
-  label {{ display: block; font-size: .85rem; color: #a0a0b0; margin: 1rem 0 .35rem; }}
-  input, select, button {{ width: 100%; padding: .85rem; font-size: 1rem;
-         border-radius: .6rem; border: 1px solid #3a3a4a; background: #1e1e2a;
-         color: inherit; -webkit-appearance: none; appearance: none; }}
-  button {{ margin-top: 1.5rem; background: #6c5ce7; border: 0; color: #fff;
-            font-weight: 600; }}
-  .msg {{ margin-top: 1.25rem; padding: .85rem; border-radius: .6rem;
-          font-size: .9rem; line-height: 1.45; }}
-  .ok {{ background: #14532d; }}
-  .err {{ background: #5b1a1a; }}
-  .hint {{ color: #8a8a9a; font-size: .8rem; margin-top: 1.5rem; line-height: 1.5; }}
-  code {{ background: #1e1e2a; padding: .1rem .35rem; border-radius: .3rem; }}
-</style></head><body><main>
-<h1>WLAN einrichten</h1>
-<p class="sub">Verbindet die Beatify-Box mit einem neuen Netz.</p>
-{message}
-<form method="post">
-  <label for="ssid">Netzwerk in Reichweite</label>
-  <select id="ssid" name="ssid_select">
-    <option value="">-- auswählen --</option>
-    {options}
-  </select>
+def _network_options(networks: list[str]) -> str:
+    if not networks:
+        return '<option value="">Keine Netze gefunden</option>'
+    return '<option value="">-- auswählen --</option>' + "".join(
+        f'<option value="{html.escape(n, quote=True)}">{html.escape(n)}</option>'
+        for n in networks
+    )
 
-  <label for="ssid_manual">…oder Name selbst eintippen</label>
-  <input id="ssid_manual" name="ssid_manual" autocapitalize="none"
-         autocorrect="off" placeholder="SSID">
 
-  <label for="password">Passwort</label>
-  <input id="password" name="password" type="password" autocapitalize="none"
-         autocorrect="off" autocomplete="off">
+_SCRIPT = """<script>
+  // The scan takes up to 25 s on the Pi. Rather than make the page wait for it,
+  // it renders immediately and fills the list when the result arrives.
+  const sel = document.getElementById('ssid_select');
+  fetch('/beatify/wifi/scan')
+    .then(r => r.json())
+    .then(d => {
+      sel.innerHTML = d.options;
+      sel.disabled = false;
+      document.getElementById('scanning').style.display = 'none';
+    })
+    .catch(() => { document.getElementById('scanning').textContent = 'Suche fehlgeschlagen'; });
 
-  <label for="pin">Admin-PIN</label>
-  <input id="pin" name="pin" type="password" inputmode="numeric"
-         autocomplete="one-time-code" placeholder="------">
-
-  <button type="submit">Verbinden</button>
-</form>
-<p class="hint">
-  Das Heimnetz und der Handy-Hotspot bleiben gespeichert — die Box nimmt
-  automatisch das Netz, das gerade erreichbar ist. Nach dem Wechsel ist sie
-  unter <code>http://batocera.local:8123</code> erreichbar.
-</p>
-</main></body></html>
-"""
+  // Typing a name by hand and picking one from the list are alternatives;
+  // showing both as active invites filling in two different networks.
+  const manual = document.getElementById('ssid_manual');
+  sel.addEventListener('change', () => { if (sel.value) manual.value = ''; });
+  manual.addEventListener('input', () => { if (manual.value) sel.value = ''; });
+</script>"""
 
 
 def register_wifi_routes(app: web.Application, auth: Any, port: int) -> None:
-    """Mount the setup page. Gated by the admin PIN, LAN-only."""
+    """Mount the setup page."""
 
-    def render(message: str = "", options: str = "") -> web.Response:
-        return web.Response(
-            text=_PAGE.format(message=message, options=options), content_type="text/html"
-        )
+    def render(msg: str = "") -> web.Response:
+        body = f"""{msg}
+<form method="post">
+  <label for="ssid_select">Netzwerk in Reichweite</label>
+  <select id="ssid_select" name="ssid_select" disabled>
+    <option value="">Suche läuft…</option>
+  </select>
+  <p id="scanning" class="empty"><span class="spinner"></span>Netze werden gesucht…</p>
 
-    async def options_html() -> str:
-        return "".join(
-            f'<option value="{html.escape(s, quote=True)}">{html.escape(s)}</option>'
-            for s in await scan_networks()
-        )
+  <label for="ssid_manual">…oder Namen selbst eintippen</label>
+  <input id="ssid_manual" name="ssid_manual" autocapitalize="none"
+         autocorrect="off" spellcheck="false" placeholder="SSID">
+
+  <label for="password">Passwort</label>
+  <input id="password" name="password" type="password" autocapitalize="none"
+         autocorrect="off" spellcheck="false" autocomplete="off">
+  {_pin_field(auth)}
+  <button type="submit">Verbinden</button>
+</form>
+<h2>Gut zu wissen</h2>
+<p class="empty">
+  Heimnetz und Handy-Hotspot bleiben gespeichert — die Box nimmt automatisch
+  das Netz, das gerade erreichbar ist. Nach dem Wechsel ist sie unter
+  <strong>batocera.local</strong> erreichbar.
+</p>"""
+        return page("Beatify · WLAN", "WLAN einrichten",
+                    "Verbindet die Box mit einem neuen Netz.", body, _SCRIPT)
 
     async def get(request: web.Request) -> web.StreamResponse:
-        return render(options=await options_html())
+        return render()
+
+    async def scan(request: web.Request) -> web.StreamResponse:
+        return web.json_response({"options": _network_options(await scan_networks())})
 
     async def post(request: web.Request) -> web.StreamResponse:
         form = await request.post()
         ssid = str(form.get("ssid_manual") or form.get("ssid_select") or "").strip()
         password = str(form.get("password") or "")
-        pin = str(form.get("pin") or "")
 
-        if not auth.check_pin(pin):
-            return render('<div class="msg err">Falsche Admin-PIN.</div>', await options_html())
+        if not auth.check_pin(str(form.get("pin") or "")):
+            return render(message("Falsche Admin-PIN.", ok=False))
         if not ssid:
-            return render(
-                '<div class="msg err">Kein Netzwerk gewählt.</div>', await options_html()
-            )
+            return render(message("Kein Netzwerk gewählt.", ok=False))
 
         ok, detail = await apply_network(ssid, password)
         if not ok:
-            return render(
-                f'<div class="msg err">{html.escape(detail)}</div>', await options_html()
-            )
+            return render(message(html.escape(detail), ok=False))
 
-        return render(
-            '<div class="msg ok"><strong>Gespeichert.</strong><br>'
-            f"Die Box wechselt jetzt zu <em>{html.escape(ssid)}</em>. "
-            "Verbinde dein Telefon mit demselben Netz und öffne dann "
-            f"<code>http://batocera.local:{port}/beatify/admin</code>.<br><br>"
-            f"<small>{html.escape(detail)}</small></div>",
-            await options_html(),
-        )
+        return render(message(
+            f"<strong>Gespeichert.</strong><br>Die Box wechselt jetzt zu "
+            f"<em>{html.escape(ssid)}</em>. Verbinde dein Telefon mit demselben "
+            f"Netz und öffne dann <strong>batocera.local</strong>."
+        ))
 
     app.router.add_route("GET", "/beatify/wifi", get)
     app.router.add_route("POST", "/beatify/wifi", post)
+    app.router.add_route("GET", "/beatify/wifi/scan", scan)
+
+
+def _pin_field(auth: Any) -> str:
+    if not getattr(auth, "require_pin", True):
+        return ""
+    return """
+  <label for="pin">Admin-PIN</label>
+  <input id="pin" name="pin" type="password" inputmode="numeric"
+         autocomplete="one-time-code" placeholder="------">"""

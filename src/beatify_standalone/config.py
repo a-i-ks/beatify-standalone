@@ -50,6 +50,12 @@ class Config:
 
     # Admin login for the OAuth-compatible auth endpoints.
     admin_pin: str | None = None
+    # Whether a PIN is demanded at all. Off by default: this box lives on a
+    # private network, is never exposed to the internet, and typing a six-digit
+    # code on a phone before every change is friction that gets in the way more
+    # often than it protects. Turn it on when guests are around and you would
+    # rather they could not move the box to another network.
+    require_admin_pin: bool = False
 
     @property
     def config_path(self) -> Path:
@@ -86,6 +92,7 @@ class Config:
             librespot_bitrate=int(raw.get("librespot_bitrate", 320)),
             librespot_extra_args=list(raw.get("librespot_extra_args", [])),
             admin_pin=raw.get("admin_pin"),
+            require_admin_pin=bool(raw.get("require_admin_pin", False)),
         )
 
         # Environment wins over the file — handy for the Batocera service script
@@ -120,5 +127,6 @@ class Config:
             "librespot_bitrate": self.librespot_bitrate,
             "librespot_extra_args": self.librespot_extra_args,
             "admin_pin": self.admin_pin,
+            "require_admin_pin": self.require_admin_pin,
         }
         self.config_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")

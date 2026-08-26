@@ -49,7 +49,10 @@ class AccessTokenInfo:
 class AuthManager:
     """Issues and validates the tokens the admin UI carries."""
 
-    def __init__(self, data_dir: Path, pin: str | None = None) -> None:
+    def __init__(
+        self, data_dir: Path, pin: str | None = None, require_pin: bool = True
+    ) -> None:
+        self.require_pin = require_pin
         self._path = data_dir / "auth.json"
         self._refresh_tokens: dict[str, dict[str, Any]] = {}
         self._access_tokens: dict[str, AccessTokenInfo] = {}
@@ -92,6 +95,14 @@ class AuthManager:
         return self._pin
 
     def check_pin(self, candidate: str) -> bool:
+        """Validate a PIN, or wave it through when none is demanded.
+
+        Kept as one method rather than scattering `if require_pin` across every
+        page: a check that is sometimes skipped is easier to reason about in one
+        place than a check that is sometimes absent in five.
+        """
+        if not self.require_pin:
+            return True
         return secrets.compare_digest(str(candidate or ""), self.pin)
 
     # -- tokens -----------------------------------------------------------
@@ -183,17 +194,18 @@ _LOGIN_PAGE = """<!doctype html>
   form {{ background: #1e1e2a; padding: 2rem; border-radius: 1rem; width: min(20rem, 90vw);
           box-shadow: 0 1rem 3rem rgb(0 0 0 / .4); }}
   h1 {{ font-size: 1.25rem; margin: 0 0 1.25rem; }}
-  input {{ width: 100%; box-sizing: border-box; padding: .75rem; font-size: 1.5rem;
+  input {{ width: 100%; box-sizing: border-box; padding: .85rem; font-size: 1.5rem;
            text-align: center; letter-spacing: .3em; border-radius: .5rem;
            border: 1px solid #3a3a4a; background: #12121a; color: inherit; }}
-  button {{ width: 100%; margin-top: 1rem; padding: .75rem; font-size: 1rem;
-            border: 0; border-radius: .5rem; background: #6c5ce7; color: #fff; }}
+  /* 3rem tall so it is comfortably tappable one-handed on a small phone. */
+  button {{ width: 100%; margin-top: 1rem; padding: .95rem; font-size: 1rem;
+            min-height: 3rem; border: 0; border-radius: .5rem;
+            background: #6c5ce7; color: #fff; font-weight: 600; }}
   .err {{ color: #ff6b6b; font-size: .875rem; margin-top: .75rem; }}
 </style></head><body>
 <form method="post">
-  <h1>Beatify - Admin-PIN</h1>
-  <input name="pin" type="password" inputmode="numeric" autocomplete="one-time-code"
-         autofocus placeholder="------">
+  <h1>{heading}</h1>
+  {pin_field}
   <input type="hidden" name="client_id" value="{client_id}">
   <input type="hidden" name="redirect_uri" value="{redirect_uri}">
   <input type="hidden" name="state" value="{state}">
@@ -253,8 +265,22 @@ def register_auth_routes(app: web.Application, auth: AuthManager) -> None:
                 raise web.HTTPFound(f"{redirect_uri}{separator}{urlencode(params)}")
             error = '<p class="err">Falsche PIN.</p>'
 
+        # With no PIN demanded, showing an input that accepts anything is worse
+        # than showing none: it reads as a lock that does not lock.
+        if auth.require_pin:
+            heading = "Beatify - Admin-PIN"
+            pin_field = (
+                '<input name="pin" type="password" inputmode="numeric" '
+                'autocomplete="one-time-code" autofocus placeholder="------">'
+            )
+        else:
+            heading = "Beatify - Anmelden"
+            pin_field = ""
+
         return web.Response(
             text=_LOGIN_PAGE.format(
+                heading=heading,
+                pin_field=pin_field,
                 client_id=html.escape(client_id, quote=True),
                 redirect_uri=html.escape(redirect_uri, quote=True),
                 state=html.escape(state, quote=True),

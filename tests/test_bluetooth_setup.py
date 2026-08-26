@@ -43,7 +43,7 @@ def test_connection_state_is_visible_at_a_glance():
 
 
 def test_an_empty_list_says_so():
-    assert "Noch kein Gerät" in _devices_html([])
+    assert "Noch kein Controller" in _devices_html([])
 
 
 async def test_a_bogus_address_is_refused_before_shelling_out():
@@ -55,7 +55,7 @@ async def test_a_bogus_address_is_refused_before_shelling_out():
 
 @pytest.fixture
 async def client(data_dir: Path, monkeypatch):
-    auth = AuthManager(data_dir, pin="424242")
+    auth = AuthManager(data_dir, pin="424242", require_pin=False)
     started: list[bool] = []
 
     async def fake_paired():
@@ -86,15 +86,8 @@ async def test_the_page_lists_paired_controllers(client):
     assert "Pair-Taste" in body, "tells you how to put the controller into pairing mode"
 
 
-async def test_pairing_needs_the_pin(client):
-    response = await client.post("/beatify/bluetooth", data={"action": "pair", "pin": "000000"})
-
-    assert "Falsche Admin-PIN" in await response.text()
-    assert client.started == []
-
-
-async def test_a_correct_pin_starts_the_search(client):
-    response = await client.post("/beatify/bluetooth", data={"action": "pair", "pin": "424242"})
+async def test_pairing_needs_no_pin_by_default(client):
+    response = await client.post("/beatify/bluetooth", data={"action": "pair"})
 
     assert "Suche gestartet" in await response.text()
     assert client.started == [True]
@@ -103,5 +96,60 @@ async def test_a_correct_pin_starts_the_search(client):
 async def test_status_is_pollable_for_the_page(client):
     payload = await (await client.get("/beatify/bluetooth/status")).json()
 
-    assert set(payload) == {"pairing", "log", "devices_html"}
+    assert set(payload) == {"pairing", "remaining", "found", "log", "devices_html"}
     assert "Xbox Wireless Controller" in payload["devices_html"]
+
+
+# --- session behaviour: the part that makes it usable on a phone -------------
+
+
+async def test_a_fresh_session_is_idle():
+    from beatify_standalone.bluetooth_setup import PairingSession
+
+    session = PairingSession()
+
+    assert session.running is False
+    assert session.remaining == 0
+    assert session.found is None
+
+
+async def test_a_finished_session_can_be_started_again(monkeypatch):
+    """One failed attempt must not lock the page for good."""
+    from beatify_standalone.bluetooth_setup import PairingSession
+
+    session = PairingSession()
+
+    async def instant():
+        return
+
+    monkeypatch.setattr(PairingSession, "_run_session", lambda self: instant())
+    assert await session.start() is True
+    if session._task:
+        await session._task
+    assert session.running is False
+    assert await session.start() is True
+
+
+async def test_cancelling_an_idle_session_is_harmless():
+    from beatify_standalone.bluetooth_setup import PairingSession
+
+    await PairingSession().cancel()  # must not raise
+
+
+async def test_the_log_is_bounded():
+    """A stuck search must not grow the page without limit."""
+    from beatify_standalone.bluetooth_setup import PairingSession
+
+    session = PairingSession()
+    for i in range(200):
+        session._say(f"line {i}")
+
+    assert len(session.lines) == 40
+    assert session.lines[-1] == "line 199"
+
+
+async def test_cancel_needs_no_pin_and_always_works(client):
+    """Stopping something is never the dangerous direction."""
+    response = await client.post("/beatify/bluetooth", data={"action": "cancel"})
+
+    assert "abgebrochen" in await response.text()

@@ -17,7 +17,7 @@ from beatify_standalone.wifi_setup import _escape, register_wifi_routes
 
 @pytest.fixture
 async def client(data_dir: Path, monkeypatch):
-    auth = AuthManager(data_dir, pin="424242")
+    auth = AuthManager(data_dir, pin="424242", require_pin=False)
 
     async def fake_scan():
         return ["Flying Fox", "iPhone André", "Fuchsbau"]
@@ -38,43 +38,72 @@ async def client(data_dir: Path, monkeypatch):
         yield test_client
 
 
-async def test_the_page_lists_networks_in_range(client):
+async def test_the_page_renders_without_waiting_for_the_scan(client):
+    """A scan takes up to 25 s on the Pi; the page must not block on it."""
     body = await (await client.get("/beatify/wifi")).text()
 
-    assert "Flying Fox" in body
-    assert "Fuchsbau" in body
+    assert "Suche läuft" in body
+    assert "/beatify/wifi/scan" in body, "the list is fetched separately"
 
 
-async def test_an_ssid_with_an_accent_survives_the_page(client):
+async def test_the_scan_endpoint_lists_networks_in_range(client):
+    payload = await (await client.get("/beatify/wifi/scan")).json()
+
+    assert "Flying Fox" in payload["options"]
+    assert "Fuchsbau" in payload["options"]
+
+
+async def test_an_ssid_with_an_accent_survives_the_scan(client):
     """Hotspot names carry spaces and accents as a matter of course."""
-    body = await (await client.get("/beatify/wifi")).text()
+    payload = await (await client.get("/beatify/wifi/scan")).json()
 
-    assert "iPhone André" in body
+    assert "iPhone André" in payload["options"]
 
 
-async def test_the_pin_gates_it(client):
+async def test_no_pin_field_when_no_pin_is_demanded(data_dir: Path):
+    """The field should be absent, not merely ignored."""
+    from beatify_standalone.wifi_setup import _pin_field
+
+    open_auth = AuthManager(data_dir, pin="424242", require_pin=False)
+    closed_auth = AuthManager(data_dir, pin="424242", require_pin=True)
+
+    assert _pin_field(open_auth) == ""
+    assert "Admin-PIN" in _pin_field(closed_auth)
+
+
+async def test_without_a_pin_requirement_anything_is_accepted(data_dir: Path):
+    auth = AuthManager(data_dir, pin="424242", require_pin=False)
+
+    assert auth.check_pin("") is True
+    assert auth.check_pin("wrong") is True
+
+
+async def test_with_a_pin_requirement_it_is_enforced(data_dir: Path):
+    auth = AuthManager(data_dir, pin="424242", require_pin=True)
+
+    assert auth.check_pin("") is False
+    assert auth.check_pin("424242") is True
+
+
+async def test_applying_a_network_needs_no_pin_by_default(client):
     response = await client.post(
-        "/beatify/wifi", data={"ssid_manual": "Gastnetz", "password": "x", "pin": "000000"}
-    )
-
-    assert "Falsche Admin-PIN" in await response.text()
-    assert client.applied == []
-
-
-async def test_a_correct_pin_applies_the_network(client):
-    response = await client.post(
-        "/beatify/wifi", data={"ssid_manual": "Gastnetz", "password": "geheim", "pin": "424242"}
+        "/beatify/wifi", data={"ssid_manual": "Gastnetz", "password": "geheim"}
     )
 
     assert "Gespeichert" in await response.text()
     assert client.applied == [("Gastnetz", "geheim", 3)]
 
 
+async def test_an_empty_ssid_is_refused(client):
+    response = await client.post("/beatify/wifi", data={"ssid_manual": "", "password": "x"})
+
+    assert "Kein Netzwerk" in await response.text()
+    assert client.applied == []
+
+
 async def test_it_never_touches_the_home_or_hotspot_slot(client):
     """Slots 1 and 2 are home and the phone; a venue network must not evict them."""
-    await client.post(
-        "/beatify/wifi", data={"ssid_manual": "Gastnetz", "password": "x", "pin": "424242"}
-    )
+    await client.post("/beatify/wifi", data={"ssid_manual": "Gastnetz", "password": "x"})
 
     assert client.applied[0][2] == 3
 

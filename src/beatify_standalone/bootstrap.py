@@ -56,7 +56,7 @@ class Application:
             middlewares=[web.normalize_path_middleware(append_slash=False, remove_slash=True)]
         )
         self.hass: Any = None
-        self.auth = AuthManager(config.data_dir, config.admin_pin)
+        self.auth = AuthManager(config.data_dir, config.admin_pin, config.require_admin_pin)
         self.librespot = LibrespotSupervisor(
             config.librespot_binary,
             config.librespot_name,
@@ -130,10 +130,10 @@ class Application:
             raise RuntimeError("upstream async_setup_entry returned False")
 
         _LOGGER.info(
-            "Beatify standalone ready on http://%s:%s/beatify/admin (admin PIN: %s)",
+            "Beatify standalone ready on http://%s:%s/  (admin PIN: %s)",
             self.config.host,
             self.config.port,
-            self.auth.pin,
+            self.auth.pin if self.config.require_admin_pin else "not required",
         )
         return self.app
 

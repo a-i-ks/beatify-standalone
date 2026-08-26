@@ -146,3 +146,50 @@ async def test_invalid_code_is_rejected(client):
     )
     assert response.status == 400
     assert (await response.json())["error"] == "invalid_grant"
+
+
+@pytest.fixture
+async def open_client(data_dir):
+    """A box configured the way it ships: no PIN demanded."""
+    app = web.Application()
+    register_auth_routes(app, AuthManager(data_dir, pin="424242", require_pin=False))
+    async with TestClient(TestServer(app)) as client:
+        yield client
+
+
+async def test_no_pin_field_is_shown_when_none_is_demanded(open_client):
+    """An input that accepts anything reads as a lock that does not lock."""
+    origin = f"http://{open_client.host}:{open_client.port}"
+    body = await (
+        await open_client.get(
+            "/auth/authorize",
+            params={"client_id": f"{origin}/beatify/", "redirect_uri": f"{origin}/cb"},
+        )
+    ).text()
+
+    assert 'name="pin"' not in body
+    assert "Anmelden" in body
+
+
+async def test_login_succeeds_without_a_pin(open_client):
+    origin = f"http://{open_client.host}:{open_client.port}"
+    response = await open_client.post(
+        "/auth/authorize",
+        data={"client_id": f"{origin}/beatify/", "redirect_uri": f"{origin}/cb", "state": "s"},
+        allow_redirects=False,
+    )
+
+    assert response.status == 302
+    assert "code=" in response.headers["Location"]
+
+
+async def test_a_foreign_redirect_is_still_refused_without_a_pin(open_client):
+    """Dropping the PIN must not turn this into an open redirector."""
+    origin = f"http://{open_client.host}:{open_client.port}"
+    response = await open_client.post(
+        "/auth/authorize",
+        data={"client_id": f"{origin}/beatify/", "redirect_uri": "http://evil.example/steal"},
+        allow_redirects=False,
+    )
+
+    assert response.status == 400
