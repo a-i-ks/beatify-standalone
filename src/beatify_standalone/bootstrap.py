@@ -21,6 +21,7 @@ from .config import Config
 from .librespot import LibrespotSupervisor
 from .media_player_driver import MediaPlayerDriver
 from .spotify import SpotifyClient, SpotifyError
+from .wifi_setup import register_wifi_routes
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -77,6 +78,7 @@ class Application:
         self.hass = hass
 
         register_auth_routes(self.app, self.auth)
+        register_wifi_routes(self.app, self.auth, self.config.port)
         self._register_spotify_routes()
 
         # librespot first: the Connect device needs to exist before the driver

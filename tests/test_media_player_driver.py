@@ -211,3 +211,59 @@ async def test_a_track_without_an_album_still_plays(driver):
     play = next(kwargs for name, kwargs in client.calls if name == "play")
     assert play["uris"] == ["spotify:track:y"]
     assert play["context_uri"] is None
+
+
+async def test_a_network_outage_marks_the_speaker_unavailable(driver):
+    """Better an honestly unavailable speaker than a silently stale one."""
+    import aiohttp
+
+    _, client, hass = driver
+
+    async def offline():
+        raise aiohttp.ClientConnectionError("no route to host")
+
+    client.current_playback = offline
+    await hass.services.async_call("homeassistant", "update_entity", {})
+
+    assert hass.states.get(ENTITY_ID).state == "unavailable"
+
+
+async def test_an_outage_is_logged_once_not_on_every_poll(driver, caplog):
+    """728 tracebacks and 3.3 MB of log in one evening is not acceptable on an SD card."""
+    import logging
+
+    import aiohttp
+
+    _, client, hass = driver
+
+    async def offline():
+        raise aiohttp.ClientConnectionError("no route to host")
+
+    client.current_playback = offline
+    with caplog.at_level(logging.WARNING):
+        for _ in range(20):
+            await hass.services.async_call("homeassistant", "update_entity", {})
+
+    complaints = [r for r in caplog.records if "reach Spotify" in r.message]
+    assert len(complaints) == 1, "one warning for a continuing outage, not twenty"
+
+
+async def test_recovery_is_reported(driver, caplog):
+    import logging
+
+    import aiohttp
+
+    _, client, hass = driver
+    original = client.current_playback
+
+    async def offline():
+        raise aiohttp.ClientConnectionError("down")
+
+    client.current_playback = offline
+    await hass.services.async_call("homeassistant", "update_entity", {})
+
+    client.current_playback = original
+    with caplog.at_level(logging.INFO):
+        await hass.services.async_call("homeassistant", "update_entity", {})
+
+    assert any("reachable again" in r.message for r in caplog.records)

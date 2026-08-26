@@ -1,0 +1,59 @@
+#!/bin/bash
+# Switch where Beatify sends its audio, without hand-editing JSON.
+#
+#   beatify-audio            show what is configured and what is available
+#   beatify-audio jack       force the 3.5 mm socket
+#   beatify-audio hdmi       force HDMI
+#   beatify-audio auto       follow PipeWire's default sink
+#
+# Why "auto" is not always right: PipeWire moves its default sink to HDMI the
+# moment a TV is plugged in. If the speaker is on the jack and the Pi is also on
+# a TV — the normal party setup — auto sends the music to the TV instead. Being
+# explicit costs exclusive access to that ALSA device, which only matters if an
+# emulator is playing sound at the same moment, and you are not doing both.
+
+set -eu
+
+CONFIG=/userdata/beatify/data/beatify_standalone.json
+PY=/userdata/beatify/python/bin/python3
+
+case "${1:-show}" in
+    jack) DEVICE="plughw:CARD=Headphones" ;;
+    hdmi) DEVICE="plughw:CARD=vc4hdmi0" ;;
+    auto) DEVICE="default" ;;
+    show)
+        echo "configured: $("$PY" -c "import json;print(json.load(open('$CONFIG'))['librespot_device'])")"
+        echo
+        echo "available ALSA cards:"
+        aplay -l 2>/dev/null | grep '^card' | sed 's/^/  /'
+        echo
+        echo "HDMI:"
+        for f in /sys/class/drm/card*-HDMI*/status; do
+            printf "  %-24s %s\n" "$(basename "$(dirname "$f")")" "$(cat "$f")"
+        done
+        echo
+        echo "PipeWire default sink:"
+        XDG_RUNTIME_DIR=/var/run wpctl status 2>/dev/null \
+            | sed -n '/Sinks:/,/^ *$/p' | grep '\*' | sed 's/^/  /' || echo "  (unavailable)"
+        exit 0
+        ;;
+    *) echo "usage: $0 {show|jack|hdmi|auto}" >&2; exit 1 ;;
+esac
+
+"$PY" - "$CONFIG" "$DEVICE" <<'PYEOF'
+import json, sys
+path, device = sys.argv[1], sys.argv[2]
+config = json.load(open(path))
+config["librespot_device"] = device
+json.dump(config, open(path, "w"), indent=2)
+print(f"librespot_device = {device}")
+PYEOF
+
+echo "restarting beatify so the Connect daemon picks it up..."
+batocera-services restart beatify >/dev/null 2>&1 || true
+sleep 8
+if pgrep -f go-librespot >/dev/null; then
+    echo "ok - Connect daemon is running"
+else
+    echo "WARNING: the Connect daemon did not come up. Check /userdata/beatify/beatify.log"
+fi

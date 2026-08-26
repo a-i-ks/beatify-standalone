@@ -113,6 +113,21 @@ mkdir -p /userdata/system/services
 sed 's/\r$//' "$APP_DIR/deploy/batocera/beatify" > /userdata/system/services/beatify
 chmod +x /userdata/system/services/beatify
 
+# --- helper commands --------------------------------------------------------
+log "Installing helper commands"
+install -m 0755 "$APP_DIR/deploy/batocera/beatify-audio" "$BIN_DIR/beatify-audio"
+
+# Game hook: pause Beatify while an emulator runs. Installed only when asked
+# for, because it is unnecessary with the default PipeWire audio path — see the
+# script's own header for the measurements behind that.
+if [ "${BEATIFY_INSTALL_GAMEHOOK:-0}" = "1" ]; then
+  mkdir -p /userdata/system/scripts
+  sed 's/\r$//' "$APP_DIR/deploy/batocera/scripts/beatify-gamehook" \
+      > /userdata/system/scripts/beatify-gamehook
+  chmod +x /userdata/system/scripts/beatify-gamehook
+  log "game hook installed (Beatify pauses while a game runs)"
+fi
+
 # --- default config ---------------------------------------------------------
 if [ ! -f "$DATA_DIR/beatify_standalone.json" ]; then
   log "Writing a starter config"

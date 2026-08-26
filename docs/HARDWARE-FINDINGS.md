@@ -158,6 +158,10 @@ All verified against upstream source, not folklore.
 | SSH is on by default: `root` / `linux`, home is `/userdata/system` | Keys go to `/userdata/system/.ssh/authorized_keys`, root-owned, `0600` |
 | `system.power.switch=RETROFLAG` | NESPi 4 power button / safe shutdown |
 | Services live in `/userdata/system/services/<name>`, enabled with `batocera-services enable` | Must have **LF** line endings or they silently never launch |
+| `S08connman` runs **before** `S11share` mounts /userdata | So at boot `/userdata/system/batocera.conf` does not exist yet and Wi-Fi is read from `/boot/batocera-boot.conf` |
+| `S65values4boot` syncs Wi-Fi keys between the two — but opens with `[ "$1" = "stop" ] \|\| exit 0` | **Only on a clean shutdown.** Pull the plug after changing a network and the change is silently forgotten |
+| EmulationStation runs scripts in `/userdata/system/scripts/` with `gameStart`/`gameStop` as `$1` | The hook point for pausing things while a game runs |
+| `batocera-services stop` waits up to 10 s for the process to die | A test that checks after 3 s reports a false failure |
 | Boot partition is 6 GB; the rest becomes `SHARE` (`/userdata`) on first boot | A 16 GB card leaves ~8.5 GB for userdata |
 
 ---
@@ -201,6 +205,23 @@ turn would have made upstream score **every track as a playback failure**.
 **`/me` cannot confirm Premium** without the `user-read-private` scope, which
 this project does not request. `product` comes back `None`. Working playback is
 the only proof available.
+
+**Wi-Fi changes need a clean reboot, or they must be written twice.** Because
+of the two rows above, `beatify_standalone.wifi_setup.apply_network` writes the
+network into `/boot/batocera-boot.conf` as well as into `batocera.conf`. A party
+box gets unplugged rather than shut down, and losing the venue's Wi-Fi that way
+would strand it.
+
+**PipeWire and direct ALSA both mix concurrent streams.** Two `aplay` processes
+on `default`, and two on `plughw:CARD=Headphones`, all play together. So Beatify
+and an emulator do *not* fight over the audio device, and the game hook in
+`deploy/batocera/scripts/` is optional rather than necessary. An earlier test
+suggested otherwise; it had started the second stream 0.3 s after the first,
+which was not long enough to be sure the first had opened at all.
+
+**Idle cost is not an argument for stopping anything.** Beatify idles at ~74 MB
+RSS and go-librespot at ~21 MB — together 1.2 % of an 8 GB Pi, about a second of
+CPU per minute.
 
 **go-librespot re-registers by itself.** With `persist_credentials: true` the
 device is back in the account's Connect list about five seconds after a service

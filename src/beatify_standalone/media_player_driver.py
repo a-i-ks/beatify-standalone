@@ -33,6 +33,8 @@ from typing import Any
 
 from homeassistant.helpers import entity_registry as er
 
+import aiohttp
+
 from .spotify import SpotifyAuthRequired, SpotifyClient, SpotifyError
 
 _LOGGER = logging.getLogger(__name__)
@@ -46,6 +48,12 @@ PLATFORM = "sonos"  # see the module docstring — this is a deliberate seam
 POLL_IDLE = 5.0
 POLL_ACTIVE = 1.0
 SETTLE_TIMEOUT = 8.0
+# A travel box lives on other people's Wi-Fi. Losing the network for a while is
+# ordinary, not exceptional, so a poll that cannot reach Spotify says so once
+# and then keeps quiet until something changes. Left unchecked it wrote a full
+# traceback every five seconds — 728 of them and 3.3 MB of log in one evening,
+# which on an SD card is both a space problem and a way to bury real faults.
+OFFLINE_LOG_EVERY = 120
 # Spotify needs a moment after a transfer before it will accept commands.
 TRANSFER_SETTLE = 1.0
 
@@ -62,6 +70,7 @@ class MediaPlayerDriver:
         # track reliably, and the album is the smallest honest one. Cached
         # because a playlist replays the same songs across games.
         self._context_cache: dict[str, str] = {}
+        self._poll_failures = 0
         self._poll_task: asyncio.Task[None] | None = None
         self._wake = asyncio.Event()
         self._active_until = 0.0
@@ -292,11 +301,33 @@ class MediaPlayerDriver:
         except SpotifyAuthRequired as err:
             self._publish(None, unavailable=True, reason=str(err))
             return None
+        except (aiohttp.ClientError, OSError) as err:
+            # No network. Say so on the state so upstream sees an unavailable
+            # speaker rather than a silently stale one, and log sparingly.
+            self._note_offline(err)
+            self._publish(None, unavailable=True, reason="Spotify unreachable")
+            return None
         except SpotifyError as err:
             _LOGGER.debug("playback poll failed: %s", err)
             return None
+
+        if self._poll_failures:
+            _LOGGER.info("Spotify reachable again after %s failed polls", self._poll_failures)
+            self._poll_failures = 0
         self._publish(playback)
         return playback
+
+    def _note_offline(self, err: Exception) -> None:
+        """Log the first failure properly, then only occasionally."""
+        self._poll_failures += 1
+        if self._poll_failures == 1:
+            _LOGGER.warning(
+                "Cannot reach Spotify (%s: %s) — will keep trying quietly",
+                type(err).__name__,
+                err,
+            )
+        elif self._poll_failures % OFFLINE_LOG_EVERY == 0:
+            _LOGGER.warning("Still cannot reach Spotify (%s failed polls)", self._poll_failures)
 
     def _publish(
         self,

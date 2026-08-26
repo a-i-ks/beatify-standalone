@@ -7,6 +7,7 @@ import asyncio
 import logging
 import signal
 import sys
+from logging.handlers import RotatingFileHandler
 from pathlib import Path
 
 from aiohttp import web
@@ -25,7 +26,14 @@ def _configure_logging(level: str, logfile: Path | None) -> None:
     handlers: list[logging.Handler]
     if logfile is not None:
         logfile.parent.mkdir(parents=True, exist_ok=True)
-        handlers = [logging.FileHandler(logfile, encoding="utf-8")]
+        # Rotating, because this lives on an SD card. One evening of a flaky
+        # network previously produced 3.3 MB of tracebacks; unbounded growth on
+        # a card that also holds the game is not acceptable.
+        handlers = [
+            RotatingFileHandler(
+                logfile, maxBytes=2_000_000, backupCount=3, encoding="utf-8"
+            )
+        ]
     else:
         handlers = [logging.StreamHandler(sys.stdout)]
     logging.basicConfig(
