@@ -55,10 +55,20 @@ Applied automatically by `deploy/install-batocera.sh`, which detects a JMicron
 bridge via `lsusb` and writes the matching quirk. `/boot` is mounted read-only —
 remount it `rw` first. A backup is kept at `/boot/cmdline.txt.beatify-backup`.
 
-**Verified after the quirk.** `deploy/ssd-stress.sh` ran 15 minutes of load:
-**130 rounds x 512 MiB written with `conv=fsync`, about 68 GB, median
-85.5 MB/s, zero kernel errors, drive stayed on the bus.** Losing UAS costs
-throughput but the link is stable.
+**Verified after the quirk.** Both paths, with real I/O:
+
+| Run | Load | Result |
+|---|---|---|
+| 15 min, write path | 130 x 512 MiB `conv=fsync`, ~68 GB, ~85 MB/s | 0 kernel errors |
+| 10 min, read path | 168 dd runs, **90.2 GB**, raw-device reads at **298-305 MB/s** | 0 kernel errors |
+
+The read rates cluster tightly in the 300 MB/s range with no gigabyte-per-second
+outliers, which is how you can tell they came off the platter rather than the
+page cache. The drive stayed on the bus throughout.
+
+**Losing UAS costs almost nothing here.** 300 MB/s over bulk-only transport is
+the USB 3 link talking, not the protocol. The throughput argument against the
+quirk does not survive measurement.
 
 > **Two traps in writing that test**, both of which made the first run claim more
 > than it proved:
