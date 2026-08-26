@@ -55,6 +55,23 @@ Applied automatically by `deploy/install-batocera.sh`, which detects a JMicron
 bridge via `lsusb` and writes the matching quirk. `/boot` is mounted read-only —
 remount it `rw` first. A backup is kept at `/boot/cmdline.txt.beatify-backup`.
 
+**Verified after the quirk.** `deploy/ssd-stress.sh` ran 15 minutes of load:
+**130 rounds x 512 MiB written with `conv=fsync`, about 68 GB, median
+85.5 MB/s, zero kernel errors, drive stayed on the bus.** Losing UAS costs
+throughput but the link is stable.
+
+> **Two traps in writing that test**, both of which made the first run claim more
+> than it proved:
+> * `iflag=count_bytes` makes `count` a *byte* count. `bs=4M count=1024` with it
+>   reads **1024 bytes**, not 4 GB — a read test that silently tests nothing.
+> * Reading back a file just written measures the page cache, not the disk. The
+>   first run reported 1.4 GB/s on the verify read, which was RAM.
+>
+> This matters here specifically: the original failure aborted on `opcode=0x28`,
+> i.e. **READ(10)**. A write-only test does not exercise the path that broke.
+> `deploy/ssd-stress.sh` now reads from varying raw-device offsets and drops
+> caches before every verify read.
+
 **Still open.** The bootloader EEPROM on this board dates from **16 Feb 2021**
 (`version d6d82cf9…`, timestamp 1613481816), which is old enough to be part of
 the picture. If the quirk ever proves insufficient, the escalation is: Retroflag
