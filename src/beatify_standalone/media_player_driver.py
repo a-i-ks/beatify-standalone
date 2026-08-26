@@ -46,6 +46,8 @@ PLATFORM = "sonos"  # see the module docstring — this is a deliberate seam
 POLL_IDLE = 5.0
 POLL_ACTIVE = 1.0
 SETTLE_TIMEOUT = 8.0
+# Spotify needs a moment after a transfer before it will accept commands.
+TRANSFER_SETTLE = 1.0
 
 
 class MediaPlayerDriver:
@@ -56,6 +58,10 @@ class MediaPlayerDriver:
         self._client = client
         self._device_name = device_name
         self._device_id: str | None = None
+        # track URI -> album URI. Spotify needs a *context* to start an exact
+        # track reliably, and the album is the smallest honest one. Cached
+        # because a playlist replays the same songs across games.
+        self._context_cache: dict[str, str] = {}
         self._poll_task: asyncio.Task[None] | None = None
         self._wake = asyncio.Event()
         self._active_until = 0.0
@@ -148,11 +154,77 @@ class MediaPlayerDriver:
         if device_id is None:
             raise SpotifyError(f"Connect device {self._device_name!r} unavailable")
 
-        # Beatify hands us a single track URI and seeks afterwards. Starting a
-        # one-track context (rather than queueing) keeps Spotify from rolling on
-        # to a "recommended" track when a snippet runs to the end mid-round.
-        await self._client.play(uris=[uri], device_id=device_id)
+        await self._ensure_active(device_id)
+
+        context = await self._resolve_context(uri)
+
+        async def _start() -> None:
+            if context:
+                await self._client.play(
+                    context_uri=context, offset={"uri": uri}, device_id=device_id
+                )
+            else:
+                await self._client.play(uris=[uri], device_id=device_id)
+
+        try:
+            await _start()
+        except SpotifyError as err:
+            # The device can also go idle between our check and the command.
+            # Transfer and retry once rather than losing the round.
+            if "Restriction violated" not in str(err):
+                raise
+            _LOGGER.info("play was refused, transferring and retrying once")
+            await self._client.transfer(device_id, play=False)
+            await asyncio.sleep(TRANSFER_SETTLE)
+            await _start()
+
         await self._settle(expect_uri=uri)
+
+    async def _resolve_context(self, track_uri: str) -> str | None:
+        """Find the album a track belongs to, to play it as a context.
+
+        Starting an exact track with `uris` fails against Spotify with
+        `403 Restriction violated` where the same track started as an album
+        context plus an offset succeeds. That is an API quirk, not a bug here —
+        verified on hardware and long reported by others — so the album lookup
+        is the reliable path rather than an optimisation.
+        """
+        cached = self._context_cache.get(track_uri)
+        if cached is not None:
+            return cached or None
+
+        try:
+            track = await self._client.track(track_uri)
+        except SpotifyError as err:
+            _LOGGER.warning("could not resolve album for %s: %s", track_uri, err)
+            return None
+
+        album = ((track or {}).get("album") or {}).get("uri")
+        # Cache the miss too, so a track without an album is looked up once.
+        self._context_cache[track_uri] = album or ""
+        return album
+
+    async def _ensure_active(self, device_id: str) -> None:
+        """Make our Connect device the active one before commanding it.
+
+        Spotify refuses `play` on an idle device with
+        `403 Player command failed: Restriction violated` — a device that is
+        merely visible is not a device that accepts commands. A party box sits
+        idle between rounds, so this is the normal case, not an edge case.
+        """
+        try:
+            devices = await self._client.devices()
+        except SpotifyError as err:
+            _LOGGER.debug("could not check device state: %s", err)
+            return
+
+        active = next((d for d in devices if d.get("id") == device_id and d.get("is_active")), None)
+        if active is not None:
+            return
+
+        _LOGGER.info("Connect device is idle — transferring playback to it")
+        await self._client.transfer(device_id, play=False)
+        await asyncio.sleep(TRANSFER_SETTLE)
 
     async def _svc_play(self, data: dict[str, Any]) -> None:
         await self._client.play(device_id=await self._target_device())

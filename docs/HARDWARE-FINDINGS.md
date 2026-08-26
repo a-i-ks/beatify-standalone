@@ -162,7 +162,54 @@ All verified against upstream source, not folklore.
 
 ---
 
-## 5. Bugs in *this* project that only hardware found
+## 5. Spotify Web API quirks, measured against a live account
+
+None of these are documented clearly enough to have been predicted. All were
+found by driving the real API from the Pi.
+
+**`play` with `uris` is refused; with `context_uri` it works.** Starting an
+exact track via `PUT /me/player/play {"uris": [...]}` answers
+
+```
+403 {"error": {"status": 403, "message": "Player command failed: Restriction violated"}}
+```
+
+while the same track started as `{"context_uri": "<album>", "offset": {"uri": "<track>"}}`
+returns 204 and plays exactly that track. The device was active and unrestricted,
+`actions.disallows` was empty, and the track reported `is_playable: true` — so
+none of the obvious explanations applied. This is a long-standing API quirk that
+others report too. `MediaPlayerDriver._resolve_context` therefore looks up each
+track's album (cached, since a playlist replays the same songs) and plays it as
+a context.
+
+**An idle Connect device refuses commands.** `play` against a device that is
+merely *visible* fails the same way. It has to be made active first with
+`PUT /me/player {"device_ids": [...]}`. A party box is idle between rounds, so
+this is the normal path, not an edge case.
+
+**Player commands answer 200 with plain text, not JSON.** `seek` and `pause`
+return a bare request id such as `72iqe6X9om_ZNEUkXZB8DLUcPG0` with
+`Content-Type: text/plain`. Parsing that as JSON and warning would put a false
+alarm in the log on every single round.
+
+**Never decide on `Content-Length`.** aiohttp reports it as `None` for chunked
+and compressed responses, and Spotify sends both. An early version returned
+`None` whenever it was absent, which silently discarded valid 200s — the device
+list came back empty and `current_playback()` reported idle forever, which in
+turn would have made upstream score **every track as a playback failure**.
+
+**`/me` cannot confirm Premium** without the `user-read-private` scope, which
+this project does not request. `product` comes back `None`. Working playback is
+the only proof available.
+
+**go-librespot re-registers by itself.** With `persist_credentials: true` the
+device is back in the account's Connect list about five seconds after a service
+restart, with no phone interaction. That is what makes the box usable on the
+road.
+
+---
+
+## 6. Bugs in *this* project that only hardware found
 
 Documented because they are the class of thing that unit tests do not catch.
 
@@ -175,7 +222,11 @@ Documented because they are the class of thing that unit tests do not catch.
    service script *also* redirected stdout into the same file. Regression test:
    `tests/test_logging_setup.py`.
 
-3. **A failing audio daemon was invisible.** The supervisor logged the daemon's
+3. **`Content-Length` was used to decide whether a response had a body** —
+   see section 5. The most dangerous bug of the three: it failed silently and
+   would have made every round look like a playback failure.
+
+4. **A failing audio daemon was invisible.** The supervisor logged the daemon's
    output at `DEBUG`, so the restart loop printed "exited (1), restarting" with
    no reason. It now keeps the last ten lines and logs them at `ERROR` on a
    non-zero exit — a silently restarting audio daemon is the worst failure mode

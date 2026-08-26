@@ -51,11 +51,12 @@ async def test_play_media_starts_the_requested_track(driver):
         },
     )
 
-    assert ("play", {
-        "uris": ["spotify:track:6COzABVCHQzyvc3rTMtrXn"],
-        "device_id": FakeSpotifyClient.DEVICE_ID,
-        "position_ms": None,
-    }) in client.calls
+    play = next(kwargs for name, kwargs in client.calls if name == "play")
+    # Started as an album context with an offset, not as a bare uri list — see
+    # MediaPlayerDriver._resolve_context for why that distinction matters.
+    assert play["context_uri"] == "spotify:album:fake"
+    assert play["offset"] == {"uri": "spotify:track:6COzABVCHQzyvc3rTMtrXn"}
+    assert play["device_id"] == FakeSpotifyClient.DEVICE_ID
 
 
 async def test_play_media_publishes_state_before_returning(driver):
@@ -122,3 +123,91 @@ async def test_idle_when_nothing_is_playing(driver):
     _, _, hass = driver
     await hass.services.async_call("homeassistant", "update_entity", {})
     assert hass.states.get(ENTITY_ID).state == "idle"
+
+
+async def test_an_idle_device_is_activated_before_playing(driver):
+    """Spotify answers `play` on an idle device with 403 Restriction violated.
+
+    A party box is idle between rounds, so this is the normal path — found on
+    real hardware, where the very first real playback attempt failed with it.
+    """
+    _, client, hass = driver
+    client._devices = [{"id": FakeSpotifyClient.DEVICE_ID, "name": "Beatify", "is_active": False}]
+
+    await hass.services.async_call(
+        "media_player", "play_media",
+        {"entity_id": ENTITY_ID, "media_content_id": "spotify:track:x"},
+    )
+
+    names = client.call_names()
+    assert "transfer" in names, "must transfer to the idle device"
+    assert names.index("transfer") < names.index("play"), "transfer has to come first"
+
+
+async def test_an_active_device_is_not_needlessly_transferred(driver):
+    _, client, hass = driver
+
+    await hass.services.async_call(
+        "media_player", "play_media",
+        {"entity_id": ENTITY_ID, "media_content_id": "spotify:track:x"},
+    )
+
+    assert "transfer" not in client.call_names()
+
+
+async def test_a_restriction_violation_is_retried_after_a_transfer(driver):
+    """The device can also go idle between the check and the command."""
+    from beatify_standalone.spotify import SpotifyError
+
+    _, client, hass = driver
+    calls = {"n": 0}
+    original = client.play
+
+    async def flaky(*args, **kwargs):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            client._record("play", **kwargs)
+            raise SpotifyError("PUT /me/player/play -> 403: Player command failed: Restriction violated")
+        return await original(*args, **kwargs)
+
+    client.play = flaky
+    await hass.services.async_call(
+        "media_player", "play_media",
+        {"entity_id": ENTITY_ID, "media_content_id": "spotify:track:x"},
+    )
+
+    assert calls["n"] == 2, "retried once"
+    assert "transfer" in client.call_names()
+    assert hass.states.get(ENTITY_ID).attributes["media_content_id"] == "spotify:track:x"
+
+
+async def test_the_album_lookup_is_cached_across_plays(driver):
+    """A playlist replays the same songs; one lookup per track is enough."""
+    _, client, hass = driver
+    for _ in range(3):
+        await hass.services.async_call(
+            "media_player", "play_media",
+            {"entity_id": ENTITY_ID, "media_content_id": "spotify:track:x"},
+        )
+
+    assert client.call_names().count("track") == 1
+    assert client.call_names().count("play") == 3
+
+
+async def test_a_track_without_an_album_still_plays(driver):
+    """Falls back to the bare uri list rather than dropping the round."""
+    _, client, hass = driver
+
+    async def no_album(track_uri):
+        client._record("track", track_uri=track_uri)
+        return {"uri": track_uri}
+
+    client.track = no_album
+    await hass.services.async_call(
+        "media_player", "play_media",
+        {"entity_id": ENTITY_ID, "media_content_id": "spotify:track:y"},
+    )
+
+    play = next(kwargs for name, kwargs in client.calls if name == "play")
+    assert play["uris"] == ["spotify:track:y"]
+    assert play["context_uri"] is None

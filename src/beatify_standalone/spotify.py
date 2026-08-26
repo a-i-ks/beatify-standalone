@@ -216,11 +216,26 @@ class SpotifyClient:
         ) as response:
             # 204 is the normal success for every player command.
             if response.status in (200, 202, 204):
-                if response.status == 204 or not response.content_length:
+                if response.status == 204:
+                    return None
+                # Decide on the body, never on Content-Length: aiohttp reports
+                # it as None for chunked or compressed responses, and Spotify
+                # sends both. Trusting it silently discarded valid 200s — which
+                # made current_playback() always look idle, and therefore made
+                # upstream treat every single track as a playback failure.
+                body = await response.read()
+                if not body:
+                    return None
+                # The player commands answer 200 with a plain-text request id,
+                # not JSON. That is success, not something to warn about — and
+                # Beatify seeks once per round, so warning here would fill the
+                # log with noise that hides real problems.
+                if "json" not in (response.content_type or ""):
                     return None
                 try:
-                    return await response.json()
-                except (aiohttp.ContentTypeError, ValueError):
+                    return json.loads(body)
+                except ValueError:
+                    _LOGGER.warning("malformed JSON from %s %s", method, path)
                     return None
 
             if response.status == 401 and not _retried:
@@ -255,14 +270,33 @@ class SpotifyClient:
             "PUT", "/me/player", json_body={"device_ids": [device_id], "play": play}
         )
 
+    async def track(self, track_uri: str) -> dict[str, Any] | None:
+        """Look up a track, mainly to find the album it belongs to."""
+        track_id = track_uri.rsplit(":", 1)[-1]
+        return await self._request("GET", f"/tracks/{track_id}")
+
     async def play(
         self,
         uris: list[str] | None = None,
         device_id: str | None = None,
         position_ms: int | None = None,
+        context_uri: str | None = None,
+        offset: dict[str, Any] | None = None,
     ) -> None:
+        """Start or resume playback.
+
+        Prefer `context_uri` + `offset` over `uris` for starting a specific
+        track. Spotify rejects `uris` with `403 Player command failed:
+        Restriction violated` in situations where the equivalent context call
+        succeeds — a long-standing API quirk, reproduced here on real hardware
+        and widely reported. `MediaPlayerDriver` acts on that.
+        """
         body: dict[str, Any] = {}
-        if uris:
+        if context_uri:
+            body["context_uri"] = context_uri
+            if offset:
+                body["offset"] = offset
+        elif uris:
             body["uris"] = uris
         if position_ms is not None:
             body["position_ms"] = int(position_ms)

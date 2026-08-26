@@ -32,10 +32,19 @@ class FakeSpotifyClient:
     async def devices(self) -> list[dict[str, Any]]:
         return self._devices
 
-    async def play(self, uris=None, device_id=None, position_ms=None) -> None:
-        self._record("play", uris=uris, device_id=device_id, position_ms=position_ms)
-        if uris:
+    async def track(self, track_uri: str):
+        self._record("track", track_uri=track_uri)
+        return {"uri": track_uri, "album": {"uri": "spotify:album:fake"}}
+
+    async def play(self, uris=None, device_id=None, position_ms=None,
+                   context_uri=None, offset=None) -> None:
+        self._record("play", uris=uris, device_id=device_id, position_ms=position_ms,
+                     context_uri=context_uri, offset=offset)
+        if context_uri and offset:
+            self.current_uri = offset.get("uri")
+        elif uris:
             self.current_uri = uris[0]
+        if self.current_uri:
             self.progress_ms = position_ms or 0
         self.is_playing = True
 
@@ -59,6 +68,8 @@ class FakeSpotifyClient:
 
     async def transfer(self, device_id, play=False) -> None:
         self._record("transfer", device_id=device_id, play=play)
+        for device in self._devices:
+            device["is_active"] = device.get("id") == device_id
 
     async def current_playback(self) -> dict[str, Any] | None:
         if self.current_uri is None:
