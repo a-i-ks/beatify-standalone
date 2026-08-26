@@ -116,8 +116,19 @@ unless `XDG_RUNTIME_DIR` is set.
 `librespot_device` to `default` to go through PipeWire; fall back to
 `plughw:CARD=Headphones` (direct, exclusive) if PipeWire misbehaves.
 
-**Not yet verified.** HDMI audio — no display was connected during testing. When
-a TV is attached, re-check with `aplay -D plughw:CARD=vc4hdmi0`.
+**HDMI audio verified**, with a real Spotify track through the driver, on a TV.
+
+**The two HDMI sockets are not interchangeable, and they are unlabelled.** The
+DRM connector `HDMI-A-1` is ALSA card `vc4hdmi0`; `HDMI-A-2` is `vc4hdmi1`. On
+the test box the cable was in the second socket, so a hardcoded `vc4hdmi0` sent
+the audio to an empty port and nothing was heard while everything reported
+success. `deploy/batocera/beatify-audio` reads
+`/sys/class/drm/card*-HDMI-A-N/status` and picks the socket that actually has a
+screen on it.
+
+Note that selecting an HDMI card directly bypasses PipeWire, so PipeWire's own
+HDMI sink volume no longer applies — level is then set by Spotify and by the
+television.
 
 `speaker-test` is **not** installed on Batocera. Generate a WAV with the bundled
 Python and play it with `aplay` (see `docs/` history or just synthesise a sine).

@@ -17,9 +17,28 @@ set -eu
 CONFIG=/userdata/beatify/data/beatify_standalone.json
 PY=/userdata/beatify/python/bin/python3
 
+# Which HDMI socket has a screen on it. The Pi 4 has two, and they are not
+# interchangeable: the DRM connector HDMI-A-1 is ALSA card vc4hdmi0 and HDMI-A-2
+# is vc4hdmi1. Hardcoding vc4hdmi0 sends audio to an empty socket whenever the
+# cable happens to be in the other one — which is easy to do, since the ports
+# are unlabelled on the case.
+detect_hdmi() {
+    for n in 1 2; do
+        if [ "$(cat /sys/class/drm/card*-HDMI-A-$n/status 2>/dev/null | head -1)" = "connected" ]; then
+            echo "vc4hdmi$((n - 1))"
+            return 0
+        fi
+    done
+    return 1
+}
+
 case "${1:-show}" in
     jack) DEVICE="plughw:CARD=Headphones" ;;
-    hdmi) DEVICE="plughw:CARD=vc4hdmi0" ;;
+    hdmi)
+        CARD=$(detect_hdmi) || { echo "no HDMI display detected" >&2; exit 1; }
+        DEVICE="plughw:CARD=$CARD"
+        echo "detected HDMI on $CARD"
+        ;;
     auto) DEVICE="default" ;;
     show)
         echo "configured: $("$PY" -c "import json;print(json.load(open('$CONFIG'))['librespot_device'])")"
@@ -28,8 +47,9 @@ case "${1:-show}" in
         aplay -l 2>/dev/null | grep '^card' | sed 's/^/  /'
         echo
         echo "HDMI:"
-        for f in /sys/class/drm/card*-HDMI*/status; do
-            printf "  %-24s %s\n" "$(basename "$(dirname "$f")")" "$(cat "$f")"
+        for n in 1 2; do
+            st=$(cat /sys/class/drm/card*-HDMI-A-$n/status 2>/dev/null | head -1)
+            printf "  %-24s %-14s -> ALSA card vc4hdmi%s\n" "HDMI-A-$n" "${st:-?}" "$((n - 1))"
         done
         echo
         echo "PipeWire default sink:"
