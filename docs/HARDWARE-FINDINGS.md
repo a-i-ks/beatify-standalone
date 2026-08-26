@@ -241,7 +241,39 @@ road.
 
 ---
 
-## 6. Bugs in *this* project that only hardware found
+## 6. Bluetooth controllers
+
+An **Xbox Wireless Controller (045E:0B13)** pairs and works, driven by
+`xpadneo` v6, which Batocera ships. ERTM is already disabled
+(`/sys/module/bluetooth/parameters/disable_ertm = Y`), so the usual Xbox-on-Linux
+fix is not needed here.
+
+**The Xbox button keeps blinking, and that is not a failure.** The controller
+connects over HID-over-GATT, so the kernel names it `bluez-hog-device`. On a real
+console the host assigns a player slot and the LED then goes solid; nothing on
+Linux sends that assignment, so it blinks forever. It cost an evening to chase.
+
+Judge success by these instead:
+
+| Signal | Meaning |
+|---|---|
+| The controller rumbles twice on connect | `xpadneo_welcome_rumble` — the driver bound. This is the reliable one. |
+| `/dev/input/js0` exists | An input device was actually created |
+| `ls /sys/bus/hid/drivers/xpadneo/` lists a device | The HID profile is bound, not just the ACL link |
+| `cat /dev/input/js0` produces bytes while you press | Input genuinely arrives |
+
+`bluetoothctl` reporting `Connected: yes` proves **nothing** on its own: an
+earlier attempt showed exactly that while `xpadneo` had nothing bound and no
+input device existed at all. A Bluetooth link without a bound HID profile looks
+identical to a working controller from that command's point of view.
+
+A failed attempt leaves a broken pairing that BlueZ keeps retrying in the wrong
+transport (`le-connection-abort-by-local`). Remove the device before pairing
+again rather than retrying on top of it.
+
+---
+
+## 7. Bugs in *this* project that only hardware found
 
 Documented because they are the class of thing that unit tests do not catch.
 
