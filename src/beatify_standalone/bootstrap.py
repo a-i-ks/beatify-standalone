@@ -19,6 +19,7 @@ from aiohttp import web
 from .auth import AuthManager, register_auth_routes
 from .bluetooth_setup import register_bluetooth_routes
 from .config import Config
+from .landing import register_landing_routes
 from .librespot import LibrespotSupervisor
 from .media_player_driver import MediaPlayerDriver
 from .spotify import SpotifyClient, SpotifyError
@@ -47,7 +48,13 @@ class Application:
 
     def __init__(self, config: Config) -> None:
         self.config = config
-        self.app = web.Application()
+        # A trailing slash is something browsers and clipboards add on their own,
+        # and aiohttp matches paths exactly — so /beatify/admin/ answered 404
+        # while /beatify/admin worked. Normalising is kinder than expecting
+        # people to notice a slash.
+        self.app = web.Application(
+            middlewares=[web.normalize_path_middleware(append_slash=False, remove_slash=True)]
+        )
         self.hass: Any = None
         self.auth = AuthManager(config.data_dir, config.admin_pin)
         self.librespot = LibrespotSupervisor(
@@ -78,6 +85,7 @@ class Application:
         hass.config_entries = ConfigEntries(self._entry)
         self.hass = hass
 
+        register_landing_routes(self.app)
         register_auth_routes(self.app, self.auth)
         register_wifi_routes(self.app, self.auth, self.config.port)
         register_bluetooth_routes(self.app, self.auth)

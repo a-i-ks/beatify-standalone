@@ -200,3 +200,35 @@ async def test_claiming_admin_with_our_token_succeeds(client, app):
     async with client.ws_connect("/beatify/ws") as ws:
         message = await _join(ws, "Host", is_admin=True, ha_token=started["token"])
         assert message["type"] == "join_ack"
+
+
+@pytest.mark.parametrize("path", ["/", "/beatify"])
+async def test_the_bare_address_shows_a_front_door(client, path):
+    """Typing just the host has to lead somewhere; it used to answer 404.
+
+    This box is administered from a phone, where retyping full paths is the
+    difference between usable and not.
+    """
+    response = await client.get(path)
+
+    assert response.status == 200
+    body = await response.text()
+    for link in ("/beatify/admin", "/beatify/play", "/beatify/wifi", "/beatify/bluetooth"):
+        assert link in body
+
+
+async def test_the_front_door_credits_upstream(client):
+    assert "mholzi/beatify" in await (await client.get("/")).text()
+
+
+@pytest.mark.parametrize(
+    "path", ["/beatify/admin/", "/beatify/play/", "/beatify/wifi/", "/beatify/bluetooth/"]
+)
+async def test_a_trailing_slash_still_finds_the_page(client, path):
+    """Regression: aiohttp matches exactly, so /beatify/admin/ answered 404.
+
+    Browsers and clipboards append that slash by themselves.
+    """
+    response = await client.get(path)
+
+    assert response.status == 200, f"{path} should resolve like the slash-less form"
