@@ -271,6 +271,54 @@ A failed attempt leaves a broken pairing that BlueZ keeps retrying in the wrong
 transport (`le-connection-abort-by-local`). Remove the device before pairing
 again rather than retrying on top of it.
 
+### Why this particular controller never worked over Bluetooth
+
+The driver says so itself, and it is worth grepping for before investigating
+anything else:
+
+```
+xpadneo 0005:045E:0B13.000A: BLE firmware version 5.09, please upgrade for better stability
+Bluetooth: hci0: Bad flag given (0x1) vs supported (0x0)
+```
+
+The controller pairs, `xpadneo` binds, the welcome rumble fires — and the link
+dies somewhere between 9 and 69 seconds later having delivered **zero** input
+events. `dmesg | grep xpadneo` names the cause in one line. Hours went into
+config theories first.
+
+Firmware is updated only through the Xbox Accessories app on Windows or through
+an Xbox console; there is no Linux path. xpadneo's issue #472 documents doing it
+in a Windows VM with USB passthrough.
+
+**Ruled out along the way**, so nobody repeats them:
+
+* *Wi-Fi/Bluetooth coexistence.* Real on a Pi 4, but not this: the box is on
+  5 GHz (5500 MHz), so the shared 2.4 GHz front end is idle.
+* *ERTM.* Already disabled by Batocera.
+* *`ControllerMode = bredr`.* Actively harmful here. Product `0x0B13` is an
+  Xbox Series X|S controller, and those connect over BLE by design — the
+  `bluez-hog-device` name is normal for them, not a symptom. Forcing classic
+  Bluetooth removes the only transport the controller has, and it stops being
+  discoverable at all.
+* *Batocera's LE tuning.* `main.conf` ships a commented `[LE]` block labelled
+  "for Xbox X|S controllers". Enabling it changed the reported device name from
+  `bluez-hog-device` to `Xbox Wireless Controller`, so it does something — but
+  it did not stop the disconnects.
+
+### Two traps when testing this remotely
+
+**`bluetoothctl scan on` stops scanning the moment it exits.** Run
+non-interactively it connects, starts discovery, prints `Discovery started`, and
+returns — and discovery ends with the client, while `bluetoothctl show` says
+`Discovering: no`. Hold stdin open for the whole window instead:
+`( echo "scan on"; sleep 300 ) | bluetoothctl &`. A search that silently is not
+searching looks exactly like a controller that will not pair.
+
+**Reading `/dev/input/js0` always yields a burst that is not input.** The
+joystick API emits one synthetic event per axis and per button on open — for an
+Xbox pad, 19 events, 152 bytes. Measuring that and concluding "input works" is a
+mistake this project made. Always take a no-press baseline first, and compare.
+
 ---
 
 ## 7. Bugs in *this* project that only hardware found
