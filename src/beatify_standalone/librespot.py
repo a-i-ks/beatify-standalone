@@ -210,6 +210,30 @@ class LibrespotSupervisor:
             self._recent.append(text)
             _LOGGER.debug("librespot: %s", text)
 
+    async def set_audio_device(self, device: str | None) -> None:
+        """Point the daemon at a different output and restart just the daemon.
+
+        Restarting the whole service would be simpler but cannot be triggered
+        from a web request — the process serving that request is the one that
+        would die. Only the Connect daemon needs to come back.
+        """
+        self._alsa_device = device
+        self.write_config()
+        if self._task is None:
+            await self.start()
+            return
+        process, self._process = self._process, None
+        if process is not None and process.returncode is None:
+            process.terminate()
+            try:
+                await asyncio.wait_for(process.wait(), timeout=5)
+            except (TimeoutError, asyncio.TimeoutError):
+                process.kill()
+                await process.wait()
+        # The supervisor loop sees the exit and starts it again with the new
+        # config, which is exactly the restart we want.
+        _LOGGER.info("audio device changed to %s, Connect daemon restarting", device)
+
     async def stop(self) -> None:
         self._stopping = True
         process = self._process

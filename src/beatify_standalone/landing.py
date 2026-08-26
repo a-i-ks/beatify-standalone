@@ -45,6 +45,10 @@ _PAGE = """<!doctype html>
   <strong>Punktetafel</strong>
   <span>Große Ansicht für den Fernseher</span></a>
 
+<a href="/beatify/audio">
+  <strong>Audioausgang</strong>
+  <span>Zwischen Klinke und Fernseher umschalten, mit Testton</span></a>
+
 <a href="/beatify/wifi">
   <strong>WLAN einrichten</strong>
   <span>Die Box mit einem neuen Netz verbinden</span></a>
