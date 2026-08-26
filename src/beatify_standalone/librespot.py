@@ -35,6 +35,13 @@ _LOGGER = logging.getLogger(__name__)
 RESTART_DELAY_MIN = 2
 RESTART_DELAY_MAX = 30
 
+# At boot the service can win the race against PipeWire, and the daemon exits
+# immediately because its audio device does not exist yet. That resolves itself
+# within seconds. Shouting ERROR about it on every single boot would train the
+# reader to ignore the one time it means something, so early failures are
+# reported calmly and only a persistent one is escalated.
+STARTUP_GRACE_ATTEMPTS = 4
+
 FLAVOR_GO = "go"
 FLAVOR_RUST = "rust"
 
@@ -66,6 +73,7 @@ class LibrespotSupervisor:
         # this the supervisor logs "exited (1), restarting" forever and the
         # actual reason — a bad flag, a busy audio device — stays invisible.
         self._recent: deque[str] = deque(maxlen=10)
+        self._consecutive_failures = 0
 
     @property
     def device_name(self) -> str:
@@ -142,6 +150,7 @@ class LibrespotSupervisor:
             argv = self._argv()
             _LOGGER.info("starting Spotify Connect daemon: %s", " ".join(argv))
             self._recent.clear()
+            started_at = asyncio.get_running_loop().time()
             try:
                 self._process = await asyncio.create_subprocess_exec(
                     *argv,
@@ -155,18 +164,37 @@ class LibrespotSupervisor:
             await self._pump_output(self._process)
             code = await self._process.wait()
             self._process = None
+
+            # Surviving a while means it really came up; anything after that is
+            # a fresh problem, not a continuation of the boot race.
+            if asyncio.get_running_loop().time() - started_at > 30:
+                self._consecutive_failures = 0
+                delay = RESTART_DELAY_MIN
             if self._stopping:
                 return
 
-            if code != 0 and self._recent:
-                _LOGGER.error(
-                    "Connect daemon exited (%s). Its last output was:\n  %s",
-                    code,
-                    "\n  ".join(self._recent),
-                )
+            if code == 0:
+                self._consecutive_failures = 0
+                _LOGGER.warning("Connect daemon exited cleanly, restarting in %ss", delay)
             else:
-                _LOGGER.warning("Connect daemon exited (%s)", code)
-            _LOGGER.warning("restarting in %ss", delay)
+                self._consecutive_failures += 1
+                output = "\n  ".join(self._recent) if self._recent else "(no output)"
+                if self._consecutive_failures <= STARTUP_GRACE_ATTEMPTS:
+                    _LOGGER.info(
+                        "Connect daemon not up yet (attempt %s, exit %s) — retrying in %ss. "
+                        "At boot this usually just means PipeWire has not started.",
+                        self._consecutive_failures,
+                        code,
+                        delay,
+                    )
+                else:
+                    _LOGGER.error(
+                        "Connect daemon has failed %s times in a row (exit %s). "
+                        "There will be no audio. Its last output was:\n  %s",
+                        self._consecutive_failures,
+                        code,
+                        output,
+                    )
             await asyncio.sleep(delay)
             delay = min(delay * 2, RESTART_DELAY_MAX)
 

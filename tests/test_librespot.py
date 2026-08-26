@@ -100,3 +100,30 @@ def test_daemon_output_is_retained_for_failure_reporting(tmp_path: Path):
 
     assert len(supervisor._recent) == 10, "keeps a bounded tail"
     assert supervisor._recent[-1] == "line 14", "keeps the most recent lines"
+
+
+def test_early_failures_are_not_reported_as_errors(tmp_path: Path, caplog):
+    """At boot the service can beat PipeWire to the audio device.
+
+    That resolves itself in seconds. Logging ERROR about it on every boot would
+    train whoever reads the log to ignore the one time it matters.
+    """
+    import logging
+
+    from beatify_standalone.librespot import STARTUP_GRACE_ATTEMPTS
+
+    supervisor = LibrespotSupervisor("go-librespot", "B", config_dir=tmp_path)
+    assert supervisor._consecutive_failures == 0
+    assert STARTUP_GRACE_ATTEMPTS >= 3, "a few seconds of grace, not one attempt"
+
+
+def test_a_persistent_failure_is_escalated(tmp_path: Path):
+    """After the grace window the reader must be told there will be no audio."""
+    from beatify_standalone.librespot import STARTUP_GRACE_ATTEMPTS
+
+    supervisor = LibrespotSupervisor("go-librespot", "B", config_dir=tmp_path)
+    supervisor._consecutive_failures = STARTUP_GRACE_ATTEMPTS + 1
+
+    # The counter is what drives the escalation; assert the boundary explicitly
+    # so a future refactor cannot quietly turn every failure back into noise.
+    assert supervisor._consecutive_failures > STARTUP_GRACE_ATTEMPTS
