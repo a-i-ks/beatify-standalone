@@ -178,7 +178,23 @@ if ! grep -q '^wifi.ssid=' "\$CONF" 2>/dev/null || grep -q '^wifi.enabled=0' "\$
     say "batocera.conf seeded with wifi + retroflag power switch"
 fi
 
-# --- 3. one-shot Wi-Fi from the boot partition ---
+# --- 3. Bluetooth tuning for Xbox controllers ---
+# /etc is a tmpfs overlay, so an edit there dies at the next boot. Batocera
+# ships this block commented out and labelled "for Xbox X|S controllers"; the
+# hook re-applies it every boot so it is both persistent and reproducible on a
+# fresh card. It changed the reported device name from bluez-hog-device to
+# Xbox Wireless Controller, though it did not by itself cure the disconnects —
+# see docs/HARDWARE-FINDINGS.md, where the cause turned out to be the
+# controller's own BLE firmware.
+BT=/etc/bluetooth/main.conf
+if [ -f "\$BT" ] && ! grep -q "^MinConnectionInterval" "\$BT"; then
+    sed -i -e "s/^#MinConnectionInterval=7/MinConnectionInterval=7/" \\
+           -e "s/^#MaxConnectionInterval=9/MaxConnectionInterval=9/" \\
+           -e "s/^#ConnectionLatency=0/ConnectionLatency=0/" "\$BT"
+    say "bluetooth LE tuning applied"
+fi
+
+# --- 4. one-shot Wi-Fi from the boot partition ---
 # The rescue path for a network nobody planned for. /boot is vfat, so the file
 # can be written from any laptop -- Windows and macOS included -- with no screen
 # or keyboard attached to the Pi. Applied once and then renamed, so it never
