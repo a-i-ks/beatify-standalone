@@ -271,10 +271,10 @@ A failed attempt leaves a broken pairing that BlueZ keeps retrying in the wrong
 transport (`le-connection-abort-by-local`). Remove the device before pairing
 again rather than retrying on top of it.
 
-### Why this particular controller never worked over Bluetooth
+### Why this controller has never worked over Bluetooth — the leading theory
 
-The driver says so itself, and it is worth grepping for before investigating
-anything else:
+`xpadneo` says the firmware is old, and it says so before anything else goes
+wrong, which is why this is the first place to look:
 
 ```
 xpadneo 0005:045E:0B13.000A: BLE firmware version 5.09, please upgrade for better stability
@@ -283,12 +283,62 @@ Bluetooth: hci0: Bad flag given (0x1) vs supported (0x0)
 
 The controller pairs, `xpadneo` binds, the welcome rumble fires — and the link
 dies somewhere between 9 and 69 seconds later having delivered **zero** input
-events. `dmesg | grep xpadneo` names the cause in one line. Hours went into
-config theories first.
+events.
+
+Batocera's own wiki says the same thing for exactly this model, under
+*Xbox Core/Series S/Series X controllers*:
+
+> If the controller is not pairing correctly, it may need to have its firmware
+> updated via a Windows 10+ PC or an Xbox One/Series console.
 
 Firmware is updated only through the Xbox Accessories app on Windows or through
 an Xbox console; there is no Linux path. xpadneo's issue #472 documents doing it
 in a Windows VM with USB passthrough.
+
+**But treat this as the leading theory, not a finding.** Both sources are
+generic — a driver warning that fires on every 5.09 pad including working ones,
+and a wiki sentence that says *may*. Neither observed this box. The evidence
+actually collected here is consistent with a second explanation that was never
+tested:
+
+* The Pi 4's Bluetooth is a **Cypress CYW43455 on a UART**, sharing silicon and
+  antenna with Wi-Fi. `hciconfig` reports `Bus: UART`. It is the weakest link in
+  this box by a distance, and BLE HID is the traffic pattern that exposes it.
+* The controller has **only ever been tried on this one host**. A pad that
+  misbehaves on one adapter and nowhere else is an adapter problem.
+
+Settle it with a second host before spending money or a Windows VM on the
+firmware theory — see *Diagnosing it* below.
+
+### Diagnosing it
+
+`deploy/bt-controller-probe.sh` runs one pairing attempt end to end and answers
+the four questions in order: does it appear in a scan, does a driver bind, does
+pressing buttons produce events, and — if the link drops — what reason the
+controller gives for leaving. That last one is the fact no earlier attempt
+captured, and it is the one that separates the two theories:
+
+| Disconnect reason | Points at |
+|---|---|
+| `0x08` supervision timeout | the radio: interference, range, connection interval — an adapter problem |
+| `0x13` remote user ended it | the controller decided to leave — firmware or standby |
+| `0x22` LMP response timeout | the controller stopped answering — radio or firmware |
+| `0x3b` unacceptable connection parameters | the pad rejected our intervals — tunable in `main.conf` |
+
+The script runs on any Linux box with bluez, which is the point: run it on the
+Pi, then on a machine with a different adapter, and compare. It needs root, and
+traces HCI with `btmon` where available and `hcidump` — what Batocera ships —
+otherwise.
+
+### Paths that do not depend on the theory being right
+
+* **USB cable.** Works today, costs nothing. The wiki is blunt about it:
+  "Xbox controllers always work if connected via USB cable."
+* **Xbox Wireless Adapter.** Microsoft's own dongle speaks a proprietary
+  2.4 GHz protocol, not Bluetooth, so it sidesteps the Cypress radio and the
+  pad's BLE firmware in one move. Batocera already ships the driver —
+  `xone_dongle.ko` is present in `/lib/modules/6.12.62-v8/updates/`. The wiki
+  also reports the third-party Cipon adapter working with these pads.
 
 **Ruled out along the way**, so nobody repeats them:
 

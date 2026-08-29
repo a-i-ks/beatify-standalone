@@ -42,16 +42,21 @@ phrases at ~3x realtime, but nothing is wired up: it needs a synthetic `tts.*`
 entity so the wizard offers it, and a pause/announce/resume sequence, because a
 Spotify Connect player cannot be handed a WAV.
 
-**Bluetooth controllers do not work, and the cause is not ours.** The driver
-says so directly:
+**Bluetooth controllers do not work.** The controller pairs, xpadneo binds, the
+welcome rumble fires, and the link dies between 9 and 69 seconds later having
+delivered zero input events.
 
-    xpadneo: BLE firmware version 5.09, please upgrade for better stability
+The leading theory is the pad's own firmware — `xpadneo` warns about it, and
+Batocera's wiki names a firmware update as the fix for this exact model. But it
+is a theory: the pad has only ever been tried on this one host, and the Pi 4's
+Bluetooth is a Cypress chip on a UART sharing its antenna with Wi-Fi. Before
+buying anything or building a Windows VM, run `deploy/bt-controller-probe.sh`
+on the Pi and on a machine with a different adapter and compare — the HCI
+disconnect reason, which no earlier attempt captured, separates the two.
 
-The controller pairs, xpadneo binds, the welcome rumble fires, and the link dies
-between 9 and 69 seconds later having delivered zero input events. Firmware
-updates only through the Xbox Accessories app on Windows or an Xbox console.
-**Use a USB cable until then.** See `HARDWARE-FINDINGS.md` for what was ruled
-out, so it is not re-investigated.
+**A USB cable works today.** The Xbox Wireless Adapter is the wireless fallback
+that depends on neither theory; Batocera already ships its `xone` driver.
+See `HARDWARE-FINDINGS.md` for what was ruled out, so it is not re-investigated.
 
 ## Where the state lives
 
