@@ -117,15 +117,11 @@ chmod +x /userdata/system/services/beatify
 log "Installing helper commands"
 install -m 0755 "$APP_DIR/deploy/batocera/beatify-audio" "$BIN_DIR/beatify-audio"
 
-# Game hook: pause Beatify while an emulator runs. Installed only when asked
-# for, because it is unnecessary with the default PipeWire audio path — see the
-# script's own header for the measurements behind that.
-if [ "${BEATIFY_INSTALL_GAMEHOOK:-0}" = "1" ]; then
-  mkdir -p /userdata/system/scripts
-  sed 's/\r$//' "$APP_DIR/deploy/batocera/scripts/beatify-gamehook" \
-      > /userdata/system/scripts/beatify-gamehook
-  chmod +x /userdata/system/scripts/beatify-gamehook
-  log "game hook installed (Beatify pauses while a game runs)"
+# Drop a game hook from an older install: Beatify is meant to keep running
+# (and reachable on the website) while a game runs, not get stopped by one.
+if [ -f /userdata/system/scripts/beatify-gamehook ]; then
+  rm -f /userdata/system/scripts/beatify-gamehook
+  log "removed the old game hook (Beatify no longer stops when a game starts)"
 fi
 
 # --- default config ---------------------------------------------------------

@@ -85,6 +85,14 @@ STYLE = """
   .msg.ok { background: #14532d; }
   .msg.err { background: #5b1a1a; }
   .empty { color: var(--dim); font-size: .9rem; padding: .5rem 0; }
+  details { margin-top: 1rem; }
+  details summary {
+    cursor: pointer; color: var(--dim); font-size: .85rem;
+    padding: .6rem .2rem; list-style: none;
+  }
+  details summary::-webkit-details-marker { display: none; }
+  details summary::before { content: "▸ "; }
+  details[open] summary::before { content: "▾ "; }
   .spinner {
     display: inline-block; width: .9rem; height: .9rem; border-radius: 50%;
     border: 2px solid var(--line); border-top-color: var(--accent);

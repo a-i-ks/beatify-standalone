@@ -2,9 +2,15 @@
 
 from __future__ import annotations
 
+import asyncio
 from pathlib import Path
 
-from beatify_standalone.librespot import FLAVOR_GO, FLAVOR_RUST, LibrespotSupervisor
+from beatify_standalone.librespot import (
+    FLAVOR_GO,
+    FLAVOR_RUST,
+    LibrespotSupervisor,
+    resolve_alsa_device,
+)
 
 
 def test_go_flavor_is_invoked_with_a_config_dir(tmp_path: Path):
@@ -115,6 +121,52 @@ def test_early_failures_are_not_reported_as_errors(tmp_path: Path, caplog):
     supervisor = LibrespotSupervisor("go-librespot", "B", config_dir=tmp_path)
     assert supervisor._consecutive_failures == 0
     assert STARTUP_GRACE_ATTEMPTS >= 3, "a few seconds of grace, not one attempt"
+
+
+async def test_set_audio_device_survives_and_relaunches(tmp_path: Path, monkeypatch):
+    """Regression: set_audio_device swaps self._process to None to grab and
+    kill it, right where the restart loop's own `await self._process.wait()`
+    was reading that same attribute — a `None.wait()` that crashed the whole
+    loop, silently, so the daemon never came back after a mid-round output
+    switch. Found live on the box, not in review.
+    """
+    import beatify_standalone.librespot as librespot_module
+
+    monkeypatch.setattr(librespot_module, "RESTART_DELAY_MIN", 0)
+
+    script = tmp_path / "fake-librespot"
+    script.write_text("#!/bin/sh\ntrap 'exit 0' TERM\nwhile true; do sleep 0.05; done\n")
+    script.chmod(0o755)
+
+    supervisor = LibrespotSupervisor(str(script), "Beatify", "hw:0", config_dir=tmp_path)
+    try:
+        await supervisor.start()
+        await asyncio.sleep(0.2)
+        assert supervisor._process is not None
+        first_pid = supervisor._process.pid
+
+        await supervisor.set_audio_device("default")
+        await asyncio.sleep(0.5)
+
+        assert supervisor._task is not None and not supervisor._task.done(), (
+            "the restart loop must survive the switch"
+        )
+        assert supervisor._process is not None, "the daemon must come back up"
+        assert supervisor._process.pid != first_pid
+    finally:
+        await supervisor.stop()
+
+
+def test_resolve_alsa_device_translates_pw_prefix_to_default():
+    """A `pw:` id steers PipeWire itself; the daemon only ever sees "default"."""
+    assert resolve_alsa_device("pw:Headphones") == "default"
+    assert resolve_alsa_device("pw:vc4hdmi1") == "default"
+
+
+def test_resolve_alsa_device_leaves_everything_else_alone():
+    assert resolve_alsa_device("plughw:CARD=Headphones") == "plughw:CARD=Headphones"
+    assert resolve_alsa_device("default") == "default"
+    assert resolve_alsa_device(None) is None
 
 
 def test_a_persistent_failure_is_escalated(tmp_path: Path):

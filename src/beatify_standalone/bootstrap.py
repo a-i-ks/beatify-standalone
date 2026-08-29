@@ -8,6 +8,7 @@ not in the state machine at that moment simply does not exist to Beatify.
 
 from __future__ import annotations
 
+import asyncio
 import ipaddress
 import logging
 import sys
@@ -16,12 +17,12 @@ from typing import Any
 
 from aiohttp import web
 
-from .audio_setup import register_audio_routes
+from .audio_setup import register_audio_routes, reapply_pipewire_output_at_boot
 from .auth import AuthManager, register_auth_routes
 from .bluetooth_setup import register_bluetooth_routes
 from .config import Config
 from .landing import register_landing_routes
-from .librespot import LibrespotSupervisor
+from .librespot import LibrespotSupervisor, resolve_alsa_device
 from .media_player_driver import MediaPlayerDriver
 from .spotify import SpotifyClient, SpotifyError
 from .wifi_setup import register_wifi_routes
@@ -61,7 +62,7 @@ class Application:
         self.librespot = LibrespotSupervisor(
             config.librespot_binary,
             config.librespot_name,
-            config.librespot_device,
+            resolve_alsa_device(config.librespot_device),
             config.librespot_bitrate,
             config.librespot_extra_args,
             config.librespot_flavor,
@@ -96,6 +97,11 @@ class Application:
         # librespot first: the Connect device needs to exist before the driver
         # goes looking for it, though the driver copes if it is slow to appear.
         await self.librespot.start()
+
+        # Best-effort and non-blocking: a pinned PipeWire output does not
+        # survive a reboot on its own (/var is tmpfs, WirePlumber remembers
+        # nothing), and PipeWire itself can still be starting up right now.
+        asyncio.create_task(reapply_pipewire_output_at_boot(self.config))
 
         session = async_get_clientsession(hass)
         if not self.config.spotify_client_id:

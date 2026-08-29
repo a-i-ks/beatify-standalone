@@ -45,6 +45,18 @@ STARTUP_GRACE_ATTEMPTS = 4
 FLAVOR_GO = "go"
 FLAVOR_RUST = "rust"
 
+# A `pw:<card>` device id (see audio_setup.py) means "PipeWire, but keep the
+# output pinned to this card" — audio_setup enforces the pinning by talking to
+# PipeWire directly, so the daemon itself never sees anything but "default".
+PW_PREFIX = "pw:"
+
+
+def resolve_alsa_device(device: str | None) -> str | None:
+    """What the daemon should actually open for a given configured device."""
+    if device and device.startswith(PW_PREFIX):
+        return "default"
+    return device
+
 
 class LibrespotSupervisor:
     """Runs a Spotify Connect daemon for the life of the application."""
@@ -152,7 +164,7 @@ class LibrespotSupervisor:
             self._recent.clear()
             started_at = asyncio.get_running_loop().time()
             try:
-                self._process = await asyncio.create_subprocess_exec(
+                process = await asyncio.create_subprocess_exec(
                     *argv,
                     stdout=asyncio.subprocess.PIPE,
                     stderr=asyncio.subprocess.STDOUT,
@@ -160,10 +172,19 @@ class LibrespotSupervisor:
             except (OSError, ValueError):
                 _LOGGER.exception("could not launch %s", self._binary)
                 return
+            self._process = process
 
-            await self._pump_output(self._process)
-            code = await self._process.wait()
-            self._process = None
+            # From here on this loop only ever touches its own `process`, not
+            # `self._process`: set_audio_device() races with this exact spot,
+            # swapping self._process to None to grab the old one and kill it.
+            # Reading self._process again after that would crash on
+            # `None.wait()` and take the whole restart loop down with it —
+            # found live, when a mid-round output switch quietly stopped the
+            # Connect daemon coming back at all.
+            await self._pump_output(process)
+            code = await process.wait()
+            if self._process is process:
+                self._process = None
 
             # Surviving a while means it really came up; anything after that is
             # a fresh problem, not a continuation of the boot race.

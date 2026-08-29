@@ -17,13 +17,14 @@ A Raspberry Pi 4B in a Retroflag NESPi 4 case, running Batocera 43.1, at
 | **Audio** | 3.5 mm and HDMI both verified with a real track |
 | **Wi-Fi** | Home network + phone hotspot as a second network, joined automatically |
 | **SSD** | UAS quirk applied; 90 GB moved under load with zero kernel errors |
+| **Bluetooth controller** | Xbox Series pad; stayed disconnected until its firmware was updated via the Xbox Accessories app on Windows, now pairs and stays connected |
 | **Tests** | 201, green on the desktop and on the Pi |
 
 Administration is entirely from a phone, all pages PIN-free by default:
 
     http://batocera.local/                    front door
                         /beatify/admin        host a game
-                        /beatify/audio        output + test tone
+                        /beatify/audio        output (instant, no restart) + test tone
                         /beatify/wifi         join a network
                         /beatify/bluetooth    pair a controller
 
@@ -41,22 +42,6 @@ installed on the box with a German voice and demonstrably speaks Beatify's own
 phrases at ~3x realtime, but nothing is wired up: it needs a synthetic `tts.*`
 entity so the wizard offers it, and a pause/announce/resume sequence, because a
 Spotify Connect player cannot be handed a WAV.
-
-**Bluetooth controllers do not work.** The controller pairs, xpadneo binds, the
-welcome rumble fires, and the link dies between 9 and 69 seconds later having
-delivered zero input events.
-
-The leading theory is the pad's own firmware — `xpadneo` warns about it, and
-Batocera's wiki names a firmware update as the fix for this exact model. But it
-is a theory: the pad has only ever been tried on this one host, and the Pi 4's
-Bluetooth is a Cypress chip on a UART sharing its antenna with Wi-Fi. Before
-buying anything or building a Windows VM, run `deploy/bt-controller-probe.sh`
-on the Pi and on a machine with a different adapter and compare — the HCI
-disconnect reason, which no earlier attempt captured, separates the two.
-
-**A USB cable works today.** The Xbox Wireless Adapter is the wireless fallback
-that depends on neither theory; Batocera already ships its `xone` driver.
-See `HARDWARE-FINDINGS.md` for what was ruled out, so it is not re-investigated.
 
 ## Where the state lives
 

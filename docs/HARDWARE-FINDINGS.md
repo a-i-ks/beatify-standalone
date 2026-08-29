@@ -225,10 +225,11 @@ would strand it.
 
 **PipeWire and direct ALSA both mix concurrent streams.** Two `aplay` processes
 on `default`, and two on `plughw:CARD=Headphones`, all play together. So Beatify
-and an emulator do *not* fight over the audio device, and the game hook in
-`deploy/batocera/scripts/` is optional rather than necessary. An earlier test
-suggested otherwise; it had started the second stream 0.3 s after the first,
-which was not long enough to be sure the first had opened at all.
+and an emulator do *not* fight over the audio device, and there is no need to
+stop Beatify while a game runs — an EmulationStation `gameStart` hook that did
+that was removed for exactly this reason. An earlier test suggested the
+opposite; it had started the second stream 0.3 s after the first, which was not
+long enough to be sure the first had opened at all.
 
 **Idle cost is not an argument for stopping anything.** Beatify idles at ~74 MB
 RSS and go-librespot at ~21 MB — together 1.2 % of an 8 GB Pi, about a second of
@@ -271,44 +272,43 @@ A failed attempt leaves a broken pairing that BlueZ keeps retrying in the wrong
 transport (`le-connection-abort-by-local`). Remove the device before pairing
 again rather than retrying on top of it.
 
-### Why this controller has never worked over Bluetooth — the leading theory
+### Confirmed: it was the firmware
 
-`xpadneo` says the firmware is old, and it says so before anything else goes
-wrong, which is why this is the first place to look:
+`xpadneo` said the firmware was old, and it said so before anything else went
+wrong, which is why it was the first place to look:
 
 ```
 xpadneo 0005:045E:0B13.000A: BLE firmware version 5.09, please upgrade for better stability
 Bluetooth: hci0: Bad flag given (0x1) vs supported (0x0)
 ```
 
-The controller pairs, `xpadneo` binds, the welcome rumble fires — and the link
-dies somewhere between 9 and 69 seconds later having delivered **zero** input
+The controller paired, `xpadneo` bound, the welcome rumble fired — and the link
+died somewhere between 9 and 69 seconds later having delivered **zero** input
 events.
 
-Batocera's own wiki says the same thing for exactly this model, under
+Batocera's own wiki said the same thing for exactly this model, under
 *Xbox Core/Series S/Series X controllers*:
 
 > If the controller is not pairing correctly, it may need to have its firmware
 > updated via a Windows 10+ PC or an Xbox One/Series console.
 
-Firmware is updated only through the Xbox Accessories app on Windows or through
-an Xbox console; there is no Linux path. xpadneo's issue #472 documents doing it
-in a Windows VM with USB passthrough.
+**Updating the pad through the Xbox Accessories app on Windows fixed it.**
+Firmware only updates that way, or through an Xbox console; there is no Linux
+path. After the update the controller connects and stays connected — the
+9-to-69-second disconnect is gone.
 
-**But treat this as the leading theory, not a finding.** Both sources are
-generic — a driver warning that fires on every 5.09 pad including working ones,
-and a wiki sentence that says *may*. Neither observed this box. The evidence
-actually collected here is consistent with a second explanation that was never
-tested:
+That settles the question the first version of this section left open: a
+second, untested explanation looked just as plausible from the evidence alone —
 
 * The Pi 4's Bluetooth is a **Cypress CYW43455 on a UART**, sharing silicon and
-  antenna with Wi-Fi. `hciconfig` reports `Bus: UART`. It is the weakest link in
-  this box by a distance, and BLE HID is the traffic pattern that exposes it.
-* The controller has **only ever been tried on this one host**. A pad that
-  misbehaves on one adapter and nowhere else is an adapter problem.
+  antenna with Wi-Fi. `hciconfig` reports `Bus: UART`. It looked like the
+  weakest link in this box by a distance, and BLE HID is the traffic pattern
+  that would expose it.
+* The controller had **only ever been tried on this one host**, so a
+  misbehaving adapter could not be ruled out from here alone.
 
-Settle it with a second host before spending money or a Windows VM on the
-firmware theory — see *Diagnosing it* below.
+— but the firmware update alone made the disconnects stop, on the same host,
+with nothing else changed. The Cypress radio was never the problem.
 
 ### Diagnosing it
 
@@ -393,6 +393,54 @@ Documented because they are the class of thing that unit tests do not catch.
    no reason. It now keeps the last ten lines and logs them at `ERROR` on a
    non-zero exit — a silently restarting audio daemon is the worst failure mode
    this project has.
+
+---
+
+## 8. Switching audio output live, through PipeWire directly
+
+Picking an output used to mean rewriting go-librespot's `audio_device` and
+restarting the daemon — a few seconds of silence, awkward mid-round. Measured
+on the box instead of assumed: PipeWire can be told directly which card is the
+default output, live, with no daemon involved at all.
+
+**`pactl`, `wpctl`, `pw-play` and `pw-cat` are all present** on Batocera 43,
+reachable the same way `aplay -D default` already needed to be —
+`XDG_RUNTIME_DIR=/var/run`.
+
+**go-librespot does not hold the device open while idle.** A `pactl list
+sink-inputs` right after starting it, connected but not playing, shows nothing
+at all — it opens PipeWire only for the duration of a track. So most output
+switches have no live stream to move; setting the default sink is enough for
+whatever plays next. If a track *is* playing, `pactl move-sink-input <id>
+<sink>` re-routes it immediately, with no restart and no audible gap — verified
+with a 5-second tone kept running across the move.
+
+**Forcing a profile on a card with nothing physically attached "succeeds" and
+produces no sink.** `pactl set-card-profile … pro-audio` on `vc4hdmi0` (no
+display attached during the test) returned exit 0 and changed
+`active_profile`, but no sink ever appeared in `pactl list sinks`. This is
+section 2's `vc4hdmi0 | error 524 with no display attached` finding, seen from
+the PipeWire side instead of the ALSA side — same underlying limitation, not a
+new one. The fix here is the same shape as there: check for the sink
+afterwards rather than trusting the exit code.
+
+**None of this survives a reboot on its own.** `/var` is a `tmpfs` on
+Batocera, and there is no `/var/lib/wireplumber` — WirePlumber has nowhere to
+remember a default sink across a restart, and comes back at its own priority
+order every time. Whatever was pinned has to be reapplied once PipeWire is
+back up; `reapply_pipewire_output_at_boot` in `audio_setup.py` does this from
+Beatify's own startup, retrying for a few seconds in case it wins the race
+against PipeWire the way go-librespot itself sometimes does at boot.
+
+> **A trap while measuring this remotely.** `pkill -f beatify-standalone` run
+> over `ssh host '…'` can kill the *ssh session itself*: the remote shell's own
+> command line is `sh -c 'pkill -f beatify-standalone; …'`, which contains the
+> literal pattern being searched for, so `pkill -f` matches its own parent
+> shell and the connection dies mid-script with no further output. Happened
+> twice while testing this. The fix is the classic `ps`/`grep` self-exclusion
+> trick applied to `pkill`: `pkill -f '[b]eatify-standalone'` — a bracket
+> expression that still matches the literal text in another process's command
+> line, but not in the pattern argument that spells it with brackets.
 
 ---
 
