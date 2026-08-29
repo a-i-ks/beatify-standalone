@@ -246,6 +246,14 @@ if [ -s "$TRACE" ]; then
     note "full trace: $TRACE"
 fi
 
+# The firmware version xpadneo reports is the one number that proves whether an
+# Xbox Accessories update actually reached the pad. 5.09 is what this box saw
+# before any update was attempted.
+FW=$(dmesg | grep -oiE "BLE firmware version [0-9.]+" | tail -1 || true)
+if [ -n "$FW" ]; then
+    note "xpadneo reports: $FW"
+fi
+
 say "kernel messages since the attempt started"
 dmesg | tail -n "$(( $(dmesg | wc -l) - $(cat "$DMESG_MARK") ))" 2>/dev/null \
     | grep -iE "xpadneo|bluetooth|hid|input" | tail -25 | sed 's/^/   /' || true
