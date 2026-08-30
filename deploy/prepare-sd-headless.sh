@@ -216,52 +216,76 @@ if [ -f "\$NEWNET" ]; then
     fi
 fi
 
-# --- 5. keep /userdata on the card ---
-# Batocera's STORAGE DEVICE menu rewrites sharedevice= in batocera-boot.conf and
-# then mounts the chosen partition as /userdata -- without copying anything
-# across. Picking the SSD therefore makes the whole install (Beatify, the ROMs,
-# saves, controller pairings) look deleted, while it in fact sits untouched on
-# the card. That is not hypothetical: it happened, and the box came up on an
-# empty ex-RetroPie partition with no web UI and no paired controller. The guard
-# puts the setting back and reboots, so the box heals itself instead of
-# presenting an empty install to whoever is standing in front of it.
+# --- 5. is /userdata where it is supposed to be? ---
+# EmulationStation's STORAGE DEVICE menu rewrites sharedevice= in
+# batocera-boot.conf and moves no data. Whichever partition it names becomes
+# /userdata, so the box comes up on an unrelated filesystem: no Beatify, no
+# ROMs, no controller pairings, and nothing deleted anywhere. It happened once
+# and it reads exactly like a wiped disk.
 #
-# The marker is a one-shot, written before the healing reboot and cleared once
-# /userdata is right again, so a share that genuinely cannot be mounted records
-# the fact and gives up rather than rebooting forever. It lives on /boot (vfat),
-# so it is also readable from any laptop with the card in a reader. Create
-# /boot/beatify-allow-storage-move to stand the guard down for a deliberate
-# migration.
+# /boot/beatify-storage.conf records which filesystem is meant to hold
+# /userdata. Absent, the intent is "the SD card" — right for a build with no
+# second disk. /boot/beatify-allow-storage-move stands the guard down.
+#
+# This has to run HERE, not from /boot/preshare.sh. preshare runs inside
+# S11share, before the mount, which sounds like the better place — but calling
+# reboot from there hangs the box: init is still executing the rc script that
+# is waiting on preshare, and nothing gets far enough to bring up the network.
+# Learned the hard way. By S12populateshare the system is up enough that a
+# reboot is an ordinary, and already proven, thing to ask for.
+STORAGE=/boot/beatify-storage.conf
 GUARD=/boot/beatify-storage-guard
-SHARE_DEV=\$(blkid -L SHARE 2>/dev/null)
-USERDATA_DEV=\$(awk '\$2=="/userdata"{print \$1; exit}' /proc/mounts)
-
-if [ -z "\$SHARE_DEV" ] || [ -z "\$USERDATA_DEV" ]; then
-    :   # cannot tell which is which; never guess about where the data lives
-elif [ "\$SHARE_DEV" = "\$USERDATA_DEV" ]; then
-    if [ -f "\$GUARD" ]; then
-        mount -o remount,rw /boot 2>/dev/null || true
-        rm -f "\$GUARD"
-        mount -o remount,ro /boot 2>/dev/null || true
-        say "userdata is back on \$SHARE_DEV, storage guard re-armed"
-    fi
-elif [ -f /boot/beatify-allow-storage-move ]; then
-    say "userdata is \$USERDATA_DEV, not \$SHARE_DEV — allowed by beatify-allow-storage-move"
-elif [ -f "\$GUARD" ]; then
-    say "userdata is STILL \$USERDATA_DEV after a healing reboot — giving up rather than looping"
+BOOTCONF=/boot/batocera-boot.conf
+WANT_UUID=\$(sed -n 's/^userdata_uuid=//p' "\$STORAGE" 2>/dev/null | head -1)
+if [ -n "\$WANT_UUID" ]; then
+    WANT_SET="DEV \$WANT_UUID"
+    WANT_DEV=\$(blkid -U "\$WANT_UUID" 2>/dev/null)
 else
+    WANT_SET="INTERNAL"
+    WANT_DEV=\$(blkid -L SHARE 2>/dev/null)
+fi
+HAVE_SET=\$(sed -n 's/^[ ]*sharedevice=//p' "\$BOOTCONF" 2>/dev/null | head -1)
+HAVE_DEV=\$(awk '\$2=="/userdata"{print \$1; exit}' /proc/mounts)
+
+if [ -f /boot/beatify-allow-storage-move ]; then
+    say "storage guard stood down by /boot/beatify-allow-storage-move"
+elif [ "\$HAVE_SET" != "\$WANT_SET" ]; then
+    if [ -f "\$GUARD" ]; then
+        say "sharedevice is STILL '\$HAVE_SET' after a corrective reboot — giving up rather than looping"
+    else
+        mount -o remount,rw /boot 2>/dev/null || true
+        sed -i "s|^[ ]*sharedevice=.*|sharedevice=\$WANT_SET|" "\$BOOTCONF" 2>/dev/null || true
+        {
+            date -u '+%Y-%m-%dT%H:%M:%SZ'
+            echo "sharedevice was '\$HAVE_SET', expected '\$WANT_SET'. Restored, rebooted once."
+            echo "Nothing was deleted: this setting only picks which filesystem is /userdata."
+            echo "Delete this file to re-arm the guard."
+        } > "\$GUARD" 2>/dev/null || true
+        sync
+        NOW=\$(sed -n 's/^[ ]*sharedevice=//p' "\$BOOTCONF" 2>/dev/null | head -1)
+        mount -o remount,ro /boot 2>/dev/null || true
+        # Reboot ONLY once both the fix and the marker are known to be on disk.
+        # If /boot could not be written, rebooting would hit this same branch
+        # again on the next boot, for ever. Fail loud and stay up instead.
+        if [ "\$NOW" = "\$WANT_SET" ] && [ -f "\$GUARD" ]; then
+            say "sharedevice was '\$HAVE_SET', restored to '\$WANT_SET' — rebooting once"
+            sync
+            reboot
+        else
+            say "ERROR: could not persist the storage fix to /boot — NOT rebooting (would loop)"
+        fi
+    fi
+elif [ -n "\$WANT_DEV" ] && [ -n "\$HAVE_DEV" ] && [ "\$WANT_DEV" != "\$HAVE_DEV" ]; then
+    # The setting is right but the mount is not: S11share fell back to the SD
+    # card, or to a tmpfs, because the disk did not answer in time. Reboots
+    # cannot fix a disk that is not there, so say so instead of looping.
+    say "WARNING: userdata is on \$HAVE_DEV but should be \$WANT_DEV (\$WANT_UUID)."
+    say "WARNING: Batocera fell back to another filesystem — this data may be stale."
+elif [ -f "\$GUARD" ]; then
     mount -o remount,rw /boot 2>/dev/null || true
-    sed -i 's|^sharedevice=.*|sharedevice=INTERNAL|' /boot/batocera-boot.conf
-    {
-        date -u '+%Y-%m-%dT%H:%M:%SZ'
-        echo "/userdata came up on \$USERDATA_DEV instead of the card's SHARE (\$SHARE_DEV)."
-        echo "sharedevice was reset to INTERNAL and the box rebooted once to recover."
-        echo "Nothing was deleted: the data is on \$SHARE_DEV, where it always was."
-    } > "\$GUARD"
+    rm -f "\$GUARD"
     mount -o remount,ro /boot 2>/dev/null || true
-    say "userdata came up on \$USERDATA_DEV, not the card — reset to INTERNAL, rebooting"
-    sync
-    reboot
+    say "userdata is on \$HAVE_DEV as intended, storage guard re-armed"
 fi
 
 exit 0
