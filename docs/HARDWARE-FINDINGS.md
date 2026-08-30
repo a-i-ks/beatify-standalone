@@ -488,14 +488,26 @@ fan runs until the plug comes out. What is *established* on this box:
   directly above a commented-out `enable_uart=1`, and it was **not** enabled.
   It is now. Bluetooth is unaffected (it uses the PL011, not the mini-UART) —
   confirmed after the change: `hci0` comes up and the pad still pairs.
+* **Enabling UART does not fix it.** Tested the only way it can be: a real
+  shutdown from the menu, watched at the machine. The fan kept running. So the
+  UART line is a prerequisite Batocera documents, not the cause.
 
-What is **not** established: whether enabling UART actually fixes it. The test
-needs someone at the box, since a working fix takes the whole machine down with
-it, so it cannot be observed over SSH. Upstream has this as an open bug for
-exactly this case and Pi model — [batocera-linux#13725][fanbug], with
-[PR #13789][fanpr] unmerged — so if UART turns out not to be enough, the next
-step is patching the daemon to drive `POWEREN_PIN` low itself at shutdown rather
-than trusting the overlay.
+That leaves the daemon. Upstream has this open for exactly this case and Pi
+model — [batocera-linux#13725][fanbug], with [PR #13789][fanpr] unmerged — and
+the thread's conclusion is that `rpi-retroflag-AdvancedSafeShutdown` never
+drives `POWEREN_PIN` low, so the board is never told to cut power. Two candidate
+fixes, in the order worth trying:
+
+1. Replace the daemon's `shutdown -h` path with `shutdown -r`. Counter-intuitive,
+   but it is what the official Retroflag script does: the overlay cuts power
+   during the reboot sequence, before the system comes back up.
+2. Drive `POWEREN_PIN` low from the daemon at shutdown. A maintainer warns this
+   cuts power *immediately* and can lose metadata, so it is the second choice,
+   not the first.
+
+Note that the daemon lives in the read-only squashfs at
+`/usr/bin/rpi-retroflag-AdvancedSafeShutdown`, so a fix has to be a copy started
+from somewhere persistent rather than an edit in place.
 
 [fanbug]: https://github.com/batocera-linux/batocera.linux/issues/13725
 [fanpr]: https://github.com/batocera-linux/batocera.linux/pull/13789

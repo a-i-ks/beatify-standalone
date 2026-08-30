@@ -57,12 +57,41 @@ every boot rather than edited in place.
 | `/userdata/beatify/` | app, Python bundle, go-librespot, Piper voice, tokens |
 | `/userdata/system/services/beatify` | the autostart service |
 
-`/userdata` is the **SD card's** `SHARE` partition (`/dev/mmcblk0p2`, ~8.5 GB).
-The SSD is attached and healthy but holds nothing this build uses. Do not point
-EmulationStation's STORAGE DEVICE menu at it: that menu moves no data, so the
-box comes back up looking wiped while everything sits safe on the card. It has
-happened once; `postshare.sh` now catches it and reboots itself back. See
+`/userdata` is currently the **SD card's** `SHARE` partition (`/dev/mmcblk0p2`),
+rolled back there while the item below is open. Do not point EmulationStation's
+STORAGE DEVICE menu at another drive: that menu moves no data, so the box comes
+back up looking wiped while everything sits safe where it was. It has happened
+once; `postshare.sh` now catches it and reboots itself back. See
 `docs/HARDWARE-FINDINGS.md` §4.
+
+## Open, and where it was left
+
+**/userdata belongs on the SSD, and the move itself works.** SD cards die of
+writes and every write this box makes goes to `/userdata`; `/boot` is read-only,
+so moving it takes the card out of the wear path entirely. Measured on the box:
+64 MB written into `/userdata` produced 153 MB of sectors on the SSD and **zero**
+on the card. `deploy/move-userdata-to-ssd.sh` did the migration and verified all
+9113 files by checksum before switching anything; the SSD is one GPT partition
+labelled `BEATIFY` (`849820dc-…`), holds a complete copy, and passes `e2fsck`
+after a journal replay. The card still holds the pre-migration original.
+
+It is **not** switched on, because the box then became unreachable and needed a
+card reader to recover. Root cause of that is known and fixed: a storage guard
+was briefly run from `/boot/preshare.sh`, which executes inside `S11share` while
+init is still waiting for it, and rebooting from there produced unclean reboots.
+That hook is gone; the guard is back in `postshare.sh`, where it was already
+proven, and now refuses to reboot unless it can read its own fix back from
+`/boot` first.
+
+What is **not** yet established is why the box kept dropping off Wi-Fi
+afterwards — it did so again once while running normally on the card, so it may
+be a separate fault rather than fallout. Settle that before switching `/userdata`
+back to the SSD, since a box that vanishes is a box that needs a screwdriver.
+
+To resume: the intended target is preserved on the boot partition as
+`beatify-storage.conf.pending` — rename it back and set
+`sharedevice=DEV 849820dc-…` in `batocera-boot.conf`.
+`deploy/rescue-boot-partition.sh` reverses that from a card reader.
 
 ## Picking it up again
 
