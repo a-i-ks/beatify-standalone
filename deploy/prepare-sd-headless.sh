@@ -216,6 +216,54 @@ if [ -f "\$NEWNET" ]; then
     fi
 fi
 
+# --- 5. keep /userdata on the card ---
+# Batocera's STORAGE DEVICE menu rewrites sharedevice= in batocera-boot.conf and
+# then mounts the chosen partition as /userdata -- without copying anything
+# across. Picking the SSD therefore makes the whole install (Beatify, the ROMs,
+# saves, controller pairings) look deleted, while it in fact sits untouched on
+# the card. That is not hypothetical: it happened, and the box came up on an
+# empty ex-RetroPie partition with no web UI and no paired controller. The guard
+# puts the setting back and reboots, so the box heals itself instead of
+# presenting an empty install to whoever is standing in front of it.
+#
+# The marker is a one-shot, written before the healing reboot and cleared once
+# /userdata is right again, so a share that genuinely cannot be mounted records
+# the fact and gives up rather than rebooting forever. It lives on /boot (vfat),
+# so it is also readable from any laptop with the card in a reader. Create
+# /boot/beatify-allow-storage-move to stand the guard down for a deliberate
+# migration.
+GUARD=/boot/beatify-storage-guard
+SHARE_DEV=\$(blkid -L SHARE 2>/dev/null)
+USERDATA_DEV=\$(awk '\$2=="/userdata"{print \$1; exit}' /proc/mounts)
+
+if [ -z "\$SHARE_DEV" ] || [ -z "\$USERDATA_DEV" ]; then
+    :   # cannot tell which is which; never guess about where the data lives
+elif [ "\$SHARE_DEV" = "\$USERDATA_DEV" ]; then
+    if [ -f "\$GUARD" ]; then
+        mount -o remount,rw /boot 2>/dev/null || true
+        rm -f "\$GUARD"
+        mount -o remount,ro /boot 2>/dev/null || true
+        say "userdata is back on \$SHARE_DEV, storage guard re-armed"
+    fi
+elif [ -f /boot/beatify-allow-storage-move ]; then
+    say "userdata is \$USERDATA_DEV, not \$SHARE_DEV — allowed by beatify-allow-storage-move"
+elif [ -f "\$GUARD" ]; then
+    say "userdata is STILL \$USERDATA_DEV after a healing reboot — giving up rather than looping"
+else
+    mount -o remount,rw /boot 2>/dev/null || true
+    sed -i 's|^sharedevice=.*|sharedevice=INTERNAL|' /boot/batocera-boot.conf
+    {
+        date -u '+%Y-%m-%dT%H:%M:%SZ'
+        echo "/userdata came up on \$USERDATA_DEV instead of the card's SHARE (\$SHARE_DEV)."
+        echo "sharedevice was reset to INTERNAL and the box rebooted once to recover."
+        echo "Nothing was deleted: the data is on \$SHARE_DEV, where it always was."
+    } > "\$GUARD"
+    mount -o remount,ro /boot 2>/dev/null || true
+    say "userdata came up on \$USERDATA_DEV, not the card — reset to INTERNAL, rebooting"
+    sync
+    reboot
+fi
+
 exit 0
 HOOK
 

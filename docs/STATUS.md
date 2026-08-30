@@ -53,9 +53,16 @@ every boot rather than edited in place.
 |---|---|
 | `/boot/cmdline.txt` | the `usb-storage.quirks` for the JMS567 bridge |
 | `/boot/batocera-boot.conf` | Wi-Fi for the earliest boot stage |
-| `/boot/postshare.sh` | SSH key, persistent Wi-Fi, Bluetooth tuning — runs as root |
+| `/boot/postshare.sh` | SSH key, persistent Wi-Fi, Bluetooth tuning, storage guard — runs as root |
 | `/userdata/beatify/` | app, Python bundle, go-librespot, Piper voice, tokens |
 | `/userdata/system/services/beatify` | the autostart service |
+
+`/userdata` is the **SD card's** `SHARE` partition (`/dev/mmcblk0p2`, ~8.5 GB).
+The SSD is attached and healthy but holds nothing this build uses. Do not point
+EmulationStation's STORAGE DEVICE menu at it: that menu moves no data, so the
+box comes back up looking wiped while everything sits safe on the card. It has
+happened once; `postshare.sh` now catches it and reboots itself back. See
+`docs/HARDWARE-FINDINGS.md` §4.
 
 ## Picking it up again
 

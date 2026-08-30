@@ -174,6 +174,37 @@ All verified against upstream source, not folklore.
 | EmulationStation runs scripts in `/userdata/system/scripts/` with `gameStart`/`gameStop` as `$1` | The hook point for pausing things while a game runs |
 | `batocera-services stop` waits up to 10 s for the process to die | A test that checks after 3 s reports a false failure |
 | Boot partition is 6 GB; the rest becomes `SHARE` (`/userdata`) on first boot | A 16 GB card leaves ~8.5 GB for userdata |
+| `sharedevice=` in `/boot/batocera-boot.conf` decides which partition becomes `/userdata` | The STORAGE DEVICE menu writes it. **It moves nothing** — see below |
+
+### The STORAGE DEVICE menu looks like data loss
+
+Picking a drive in EmulationStation's STORAGE DEVICE menu rewrites `sharedevice=`
+and mounts that partition as `/userdata` on the next boot. It does **not** copy
+anything across, and it does not warn. The box then comes up with Batocera's
+empty skeleton directories: no Beatify, no web UI, no ROMs, no controller
+pairings — while all of it sits untouched on the card.
+
+It reads exactly like a wiped disk. It is not. Before assuming the worst:
+
+```sh
+awk '$2=="/userdata"{print $1}' /proc/mounts   # what is mounted now
+blkid -L SHARE                                 # where the data actually is
+grep ^sharedevice= /boot/batocera-boot.conf    # what asked for it
+```
+
+Here the SSD held an old partition labelled `retropie`, so the menu offered it
+as a plausible target and Batocera mounted it without complaint. Two telltales,
+both of which read as catastrophic and mean nothing of the kind: `df` shows a
+near-empty `/userdata`, and the **SSH host key changes**, because host keys live
+in `/userdata/system/ssh` and the other partition has its own set.
+
+`postshare.sh` now guards against this (section 5 of the generated hook): when
+`/userdata` is not the partition labelled `SHARE`, it puts `sharedevice=INTERNAL`
+back and reboots once. A marker file on `/boot` makes that a one-shot, so a share
+that genuinely cannot be mounted records the fact rather than rebooting forever,
+and `/boot/beatify-allow-storage-move` stands the guard down for a deliberate
+migration. Verified by injecting the fault on the real box: it healed itself and
+came back complete, without anyone touching it.
 
 ---
 
@@ -441,6 +472,33 @@ against PipeWire the way go-librespot itself sometimes does at boot.
 > trick applied to `pkill`: `pkill -f '[b]eatify-standalone'` — a bracket
 > expression that still matches the literal text in another process's command
 > line, but not in the pattern argument that spells it with brackets.
+
+---
+
+## 9. The case fan keeps spinning after shutdown — open
+
+The Pi halts, but the NESPi 4's board never cuts power: LEDs stay lit and the
+fan runs until the plug comes out. What is *established* on this box:
+
+* `system.power.switch=RETROFLAG` is set, `/etc/init.d/S92switch` starts
+  `rpi_gpioswitch`, and `rpi-retroflag-AdvancedSafeShutdown` is running.
+* `dtoverlay=RetroFlag_pw_io.dtbo` is present in `/boot/config.txt`. The actual
+  power cut is that overlay's job, not the Python daemon's.
+* Batocera's own `config.txt` ships `# enable UART (required for for retroflag)`
+  directly above a commented-out `enable_uart=1`, and it was **not** enabled.
+  It is now. Bluetooth is unaffected (it uses the PL011, not the mini-UART) —
+  confirmed after the change: `hci0` comes up and the pad still pairs.
+
+What is **not** established: whether enabling UART actually fixes it. The test
+needs someone at the box, since a working fix takes the whole machine down with
+it, so it cannot be observed over SSH. Upstream has this as an open bug for
+exactly this case and Pi model — [batocera-linux#13725][fanbug], with
+[PR #13789][fanpr] unmerged — so if UART turns out not to be enough, the next
+step is patching the daemon to drive `POWEREN_PIN` low itself at shutdown rather
+than trusting the overlay.
+
+[fanbug]: https://github.com/batocera-linux/batocera.linux/issues/13725
+[fanpr]: https://github.com/batocera-linux/batocera.linux/pull/13789
 
 ---
 
