@@ -491,6 +491,16 @@ fan runs until the plug comes out. What is *established* on this box:
 * **Enabling UART does not fix it.** Tested the only way it can be: a real
   shutdown from the menu, watched at the machine. The fan kept running. So the
   UART line is a prerequisite Batocera documents, not the cause.
+* **The case's own power switch does cut power.** Popping the latching button
+  on the front back out stops the fan and the LEDs immediately. That switch is
+  mechanical, in series with the supply, and owes nothing to the GPIO path — so
+  it says the wiring and the fan are fine and confines the fault to the one
+  thing that never happens: the board being *told* to cut power.
+
+That narrows it usefully. It also gives a workaround that is safe as long as the
+order is kept: shut down from the menu, wait for the Pi to actually halt, *then*
+pop the switch. Popping it on a running system is a hard power cut across a
+mounted filesystem, which is how the SSD came to need a journal replay earlier.
 
 That leaves the daemon. Upstream has this open for exactly this case and Pi
 model — [batocera-linux#13725][fanbug], with [PR #13789][fanpr] unmerged — and
