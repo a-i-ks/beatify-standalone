@@ -23,13 +23,13 @@ the Spotify Web API.
 
 ## Why a shim instead of a fork
 
-Measured against upstream `v4.3.0`:
+Measured against upstream `v4.4.0`:
 
 | | |
 |---|---|
-| Python in upstream | 67,328 LOC across 185 files |
+| Python in upstream | 68,001 LOC across 189 files |
 | Files touching `homeassistant` | 41 |
-| LOC in Home-Assistant-free files | 44,635 (66 %) |
+| LOC in Home-Assistant-free files | 45,169 (66 %) |
 | Distinct `homeassistant` imports | 25 |
 | HA services called | 15 |
 
@@ -64,7 +64,7 @@ build if a version bump reaches for anything the shim does not provide.
    └───────────────────────────────────────────┘
 ```
 
-All 54 bundled playlists carry `spotify:track:` URIs, which is what makes
+All 61 bundled playlists carry `spotify:track:` URIs, which is what makes
 dropping Music Assistant possible at all.
 
 **Deliberately not supported:** Sonos/Alexa, Apple Music, Tidal, Deezer, YouTube
@@ -84,7 +84,7 @@ still holds on every bump.
 Running **on real hardware**: a Raspberry Pi 4B in a Retroflag NESPi 4 case,
 Batocera 43.1. Upstream boots against the shim, discovers the Spotify player,
 serves its pages, and go-librespot advertises itself on the LAN as a Spotify
-Connect device. 143 tests green, on the desktop and on the Pi.
+Connect device. 219 tests green, on the desktop and on the Pi.
 
 Everything measured on that box — including three bugs only hardware found — is
 written up in [docs/HARDWARE-FINDINGS.md](docs/HARDWARE-FINDINGS.md) so a rebuild
@@ -165,7 +165,7 @@ step. Point Batocera at it via `wifi.ssid` / `wifi.key` in
 ## Updating upstream
 
 ```sh
-python3 tools/check_ha_surface.py --tag v4.4.0    # does the shim still cover it?
+python3 tools/check_ha_surface.py --tag v4.4.1    # does the shim still cover it?
 ```
 
 Only if that passes: replace `vendor/custom_components/beatify/` with the new
@@ -177,7 +177,7 @@ the exact list of shim work the bump requires.
 ```sh
 python3 -m venv .venv
 .venv/bin/pip install -r requirements-dev.txt
-.venv/bin/python -m pytest            # 139 tests
+.venv/bin/python -m pytest            # 219 tests
 .venv/bin/python tools/check_ha_surface.py
 .venv/bin/python bin/beatify-standalone --data-dir ./data --port 8123
 ```

@@ -468,12 +468,23 @@
                         <button type="button" id="year-decrement-5" class="slider-btn-year slider-btn-year--coarse" aria-label="Decrease year by 5">&minus;5</button>
                         <button type="button" id="year-decrement" class="slider-btn-year" aria-label="Decrease year">&minus;</button>
                         <div class="slider-arcade-track">
+                            <!-- #2337: these are the fallback bounds only.
+                                 applyYearRange() replaces them from the
+                                 server's year_range on the first state
+                                 update, so a playlist reaching past them is
+                                 still answerable. -->
                             <input type="range"
                                    id="year-slider"
                                    min="1950"
                                    max="2025"
                                    value="1990"
                                    class="year-slider year-slider-arcade">
+                            <!-- #2344: decade marks, built by renderYearScale()
+                                 from the same span applyYearRange() applies.
+                                 Empty here on purpose — pinning them to fixed
+                                 percentages would go wrong the moment the
+                                 bounds move, which they now do. -->
+                            <div id="year-scale" class="year-scale" aria-hidden="true"></div>
                         </div>
                         <button type="button" id="year-increment" class="slider-btn-year" aria-label="Increase year">+</button>
                         <button type="button" id="year-increment-5" class="slider-btn-year slider-btn-year--coarse" aria-label="Increase year by 5">+5</button>
@@ -718,6 +729,20 @@
                                 data-i18n-aria-label="reveal.breakdown.title">ⓘ</button>
                     </div>
                 </div>
+
+                <!-- Your collection (#2324): every song you placed close
+                     enough to keep, oldest year first. The row a score cannot
+                     be — it is still there when the game is over. -->
+                <section id="collection-section" class="card-section collection-section hidden">
+                    <h2 class="section-header">
+                        <span class="section-icon" aria-hidden="true">🗂️</span>
+                        <span data-i18n="reveal.collection.title">Your collection</span>
+                        <span id="collection-count" class="collection-count"></span>
+                    </h2>
+                    <div class="section-content-padded">
+                        <div id="collection-row" class="collection-row" role="list"></div>
+                    </div>
+                </section>
 
                 <!-- Title & Artist Reveal + Voting (#1180) -->
                 <section id="ta-reveal-section" class="card-section ta-reveal-section hidden">
