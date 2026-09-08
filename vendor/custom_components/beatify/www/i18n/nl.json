@@ -28,7 +28,7 @@
     "leaveGame": "Verlaten",
     "welcomeBack": "Welkom terug, {name}!",
     "waitingForHostReconnect": "Wachten tot de host opnieuw verbindt...",
-    "speakerUnavailable": "Speaker niet beschikbaar. Controleer je mediaspeler en probeer het opnieuw.",
+    "speakerUnavailable": "De speaker reageert niet — de host is ermee bezig.",
     "gamePaused": "Spel gepauzeerd. Even geduld...",
     "redirecting": "Doorsturen...",
     "hostCannotLeave": "De host kan het spel niet verlaten. Beëindig het spel in plaats daarvan."
@@ -68,6 +68,7 @@
     "players": "spelers"
   },
   "game": {
+    "yearLabel": "Jaar",
     "introSplashTitle": "Intro-ronde!",
     "introSplashDesc": "Stop het nummer zodra je het herkent!",
     "introSplashWaiting": "Wachten op de host...",
@@ -101,6 +102,10 @@
     "paused": "Spel gepauzeerd",
     "waitingForHost": "Wachten tot de host opnieuw verbindt...",
     "pausedHint": "Het spel gaat verder zodra de host terug is",
+    "pausedHintSpeaker": "Het spel gaat verder zodra het geluid terug is",
+    "pausedSpeaker": "De speaker reageert niet — de host is ermee bezig",
+    "pausedNoSongs": "Geen nummers meer beschikbaar",
+    "songStoppedChip": "Nummer gestopt — blijf raden",
     "difficultyEasy": "Makkelijk",
     "difficultyNormal": "Normaal",
     "difficultyHard": "Moeilijk",
@@ -177,6 +182,7 @@
     "wrong": "Fout",
     "theYearWas": "Het jaar was",
     "idleHaltBanner": "Spel gepauzeerd — niemand speelde deze ronde. Tik op Volgende ronde om door te gaan.",
+    "idleHaltBannerGuest": "Spel gepauzeerd — niemand speelde deze ronde. De host start de volgende ronde.",
     "funFact": "Leuk weetje",
     "collection": {
       "title": "Jouw verzameling",
@@ -317,6 +323,13 @@
     "chartBillboard": "Billboard Hot 100",
     "chartGerman": "Duitse hitlijsten",
     "chartUK": "UK-hitlijsten",
+    "chartEurovision": "Eurovisie",
+    "pointsShort": "ptn",
+    "chartAustria": "Oostenrijkse hitlijst",
+    "chartSwitzerland": "Zwitserse hitlijst",
+    "chartItaly": "Italiaanse hitlijst",
+    "chartFrance": "Franse hitlijst",
+    "chartSpain": "Spaanse hitlijst",
     "weeksOnChart": "weken in de hitlijst",
     "weeksShort": "wk",
     "moreAwards": "meer",
@@ -327,9 +340,12 @@
     "streakShieldHeld": "Reeksschild gereed",
     "fixYearBtn": "🎯 Verkeerd jaar? Corrigeer het",
     "flagYearBtn": "🚩 Verkeerd jaar? Laat het de host weten",
-    "flaggedForHost": "✓ Gemeld aan de host"
+    "flaggedForHost": "✓ Gemeld aan de host",
+    "finalePlayoff": "Finale",
+    "coverHint": "Cover — {year} was het origineel; het antwoord is de versie die je net hoorde."
   },
   "leaderboard": {
+    "leader": "koploper",
     "title": "Scorebord",
     "standings": "Stand",
     "finalTitle": "Einduitslag",
@@ -343,12 +359,14 @@
     "thanksForPlaying": "Bedankt voor het spelen van Beatify",
     "thanksEmoji": "Bedankt voor het spelen!",
     "waitForHost": "Wacht tot de host een nieuw spel start",
+    "rejoinHint": "Scan de QR-code opnieuw om aan het volgende spel mee te doen.",
     "bestStreak": "Beste Reeks",
     "roundsPlayed": "Gespeelde Rondes",
     "betsWon": "Gewonnen Inzetten",
     "fullRankings": "Volledige Ranglijst"
   },
   "admin": {
+    "alreadyJoined": "Je doet al mee als {name}",
     "title": "Beatify Beheer",
     "filterAll": "Alle",
     "skipRound": "Overslaan",
@@ -382,6 +400,8 @@
     "startGame": "Spel starten",
     "createGame": "Spel maken",
     "endGame": "Spel beëindigen",
+    "resumeGame": "Spel hervatten",
+    "openAdminPage": "Open de adminpagina",
     "volDown": "Zachter",
     "volUp": "Harder",
     "importPlaylist": "Spotify playlist importeren",
@@ -454,9 +474,6 @@
     "difficultyEasy": "Makkelijk",
     "difficultyNormal": "Normaal",
     "difficultyHard": "Moeilijk",
-    "difficultyEasyDesc": "Vergevingsgezinde score: Raad binnen 7 jaar om te scoren. Exact goed = 10 punten, binnen 7 jaar = 5 punten, binnen 10 jaar = 1 punt.",
-    "difficultyNormalDesc": "Standaard score: Raad binnen 3 jaar om te scoren. Exact goed = 10 punten, binnen 3 jaar = 5 punten, binnen 5 jaar = 1 punt.",
-    "difficultyHardDesc": "Uitdagende score: Alleen heel goede gokken tellen mee. Exact goed = 10 punten, binnen 2 jaar = 3 punten, anders geen punten.",
     "selectProvider": "Muziekprovider",
     "providerSpotify": "Spotify",
     "viewAnalytics": "Analytics",
@@ -488,7 +505,6 @@
     "revealAdvance": "Automatisch verder",
     "revealAdvanceOff": "Uit",
     "revealAdvanceHint": "Na de onthulling start de volgende ronde vanzelf — na een vaste tijd, of (Uit) zodra het nummer is afgelopen. Het spel loopt zonder iemand bij het adminscherm.",
-    "difficultyHint": "Makkelijk: ruime tolerantie (±7 jaar). Normaal: gemiddeld (±3 jaar). Moeilijk: alleen goede gokken tellen mee.",
     "artistChallengeHint": "Na elke ronde kunnen spelers de artiest raden voor bonuspunten. Eerste juiste antwoord: +5 punten.",
     "movieQuiz": "Filmquiz-bonus",
     "movieQuizHint": "Bij soundtracknummers raden spelers de film voor getrapte bonuspunten. Werkt alleen bij nummers met filmmetadata.",
@@ -638,7 +654,10 @@
       "needPlayerToStart": "Doe mee als speler (of laat een gast de QR scannen) voordat je begint.",
       "wsReconnecting": "Opnieuw verbinden met de spelserver — probeer het opnieuw.",
       "waitingForGuests": "Wacht op gasten…",
-      "libraryPlaylistLabel": "je bibliotheek"
+      "libraryPlaylistLabel": "je bibliotheek",
+      "noPlaylist": "geen playlist",
+      "playlistCount": "{count} playlists",
+      "noSpeaker": "geen speaker"
     },
     "startRematchFailed": "Kan rematch niet starten",
     "startGameplayFailed": "Kan het spel niet starten",
@@ -865,6 +884,9 @@
     "pagination": "Pagina {current} van {total}"
   },
   "dashboard": {
+    "nowPlaying": "Nu speelt",
+    "reveal": "Onthulling",
+    "nowRevealing": "We onthullen",
     "autoAdvance": "Auto-volgende",
     "title": "Beatify - Dashboard",
     "connecting": "Verbinden met spel...",
@@ -1049,6 +1071,20 @@
     "RATE_LIMITED": "Te veel verzoeken — wacht een minuut en probeer opnieuw.",
     "RECONNECTING": "Opnieuw verbinden...",
     "ROUND_EXPIRED": "De ronde is verlopen",
+    "FROZEN": "Bevroren — even wachten",
+    "ELIMINATED": "Je ligt eruit",
+    "NO_STEAL_AVAILABLE": "Geen steal beschikbaar",
+    "CANNOT_STEAL_SELF": "Je kunt niet van jezelf stelen",
+    "NO_SABOTAGE_AVAILABLE": "Geen sabotage beschikbaar",
+    "CANNOT_SABOTAGE_SELF": "Je kunt jezelf niet saboteren",
+    "TARGET_NOT_SUBMITTED": "Die heeft nog niet geraden",
+    "TARGET_ALREADY_SUBMITTED": "Die heeft al ingeleverd",
+    "NO_ARTIST_CHALLENGE": "Geen artiestenronde actief",
+    "NO_MOVIE_CHALLENGE": "Geen filmronde actief",
+    "NO_TITLE_ARTIST_CHALLENGE": "Nu niets te raden",
+    "INTERNAL_ERROR": "Er ging iets mis",
+    "nameEmpty": "Vul een naam in",
+    "nameTooLong": "Naam te lang (max {max} tekens)",
     "SAVE_FAILED": "Kon de mix niet opslaan. Probeer het opnieuw.",
     "SESSION_NOT_FOUND": "Sessie verlopen",
     "SESSION_TAKEOVER": "Sessie overgenomen door een ander tabblad",
@@ -1077,7 +1113,8 @@
     "joinTimeout": "Verbinden mislukt. Probeer het opnieuw.",
     "INVALID_REQUEST": "Dit verzoek was ongeldig. Controleer je instellingen en probeer het opnieuw.",
     "NO_PLAYLISTS_SELECTED": "Kies minstens één afspeellijst voordat je een spel start.",
-    "NO_PLAYABLE_SONGS": "Geen van de nummers in de gekozen afspeellijsten kan met deze muziekdienst worden afgespeeld. Probeer een andere lijst of een andere dienst."
+    "NO_PLAYABLE_SONGS": "Geen van de nummers in de gekozen afspeellijsten kan met deze muziekdienst worden afgespeeld. Probeer een andere lijst of een andere dienst.",
+    "networkRetry": "Netwerkfout. Probeer het opnieuw."
   },
   "highlights": {
     "highlight_exact_match": "{player} had '{song}' perfect — {year}!",
@@ -1137,7 +1174,13 @@
         "step3": "Kom terug — je {platform} verschijnt als Music Assistant-luidspreker",
         "primary": "Music Assistant instellen →",
         "ghost": "Andere dienst kiezen",
-        "footer": "Liever Spotify? Werkt direct op {platform} — geen add-on nodig."
+        "footer": "Liever Spotify? Werkt direct op {platform} — geen add-on nodig.",
+        "amazonTitle": "Amazon Music heeft een Amazon Echo nodig",
+        "amazonBody": "Amazon Music is niet beschikbaar via Music Assistant. Kies in plaats daarvan een Amazon Echo (via de alexa_media-integratie) als speaker.",
+        "amazonStep1": "Installeer de <strong>Alexa Media Player</strong>-integratie in Home Assistant",
+        "amazonStep2": "Koppel je Amazon-account en je Echo",
+        "amazonStep3": "Kom terug — je Echo verschijnt dan als beschikbare speaker",
+        "amazonPrimary": "Alexa Media Player instellen →"
       }
     },
     "step3": {
@@ -1158,15 +1201,16 @@
       "roundsCustomLabel": "rondes (min. 10)",
       "roundsHint": "ca. {min} min voor {rounds} rondes",
       "autoAdvance": "Auto-doorgaan bij reveal",
-      "autoAdvanceOff": "Uit",
       "language": "Aankondigingstaal",
       "easy": "Makkelijk",
       "normal": "Normaal",
       "hard": "Moeilijk",
       "modes": "Spelmodi",
-      "difficultyHintEasy": "Soepel: 10 ptn voor exact jaar, 5 ptn binnen ±7 jaar, 1 pt binnen ±10 jaar.",
-      "difficultyHintNormal": "In balans: 10 ptn voor exact jaar, 5 ptn binnen ±3 jaar, 1 pt binnen ±5 jaar.",
-      "difficultyHintHard": "Streng: 10 ptn voor exact jaar, 3 ptn binnen ±2 jaar, anders 0.",
+      "difficultyBands": "{exact} ptn voor exact jaar, {close} ptn binnen ±{closeRange} jaar, {near} pt binnen ±{nearRange} jaar",
+      "difficultyBandsNoNear": "{exact} ptn voor exact jaar, {close} ptn binnen ±{closeRange} jaar, anders 0",
+      "difficultyHintEasy": "Soepel: {bands}.",
+      "difficultyHintNormal": "In balans: {bands}.",
+      "difficultyHintHard": "Streng: {bands}.",
       "coreMode": "Spelmodus",
       "modeYear": "Jaar-modus",
       "modeYearHint": "Raad het releasejaar van elk nummer.",
@@ -1220,7 +1264,8 @@
         "presetCustom": "Aangepast",
         "test": "Testaankondiging sturen",
         "testOk": "Verzonden",
-        "testFail": "Mislukt"
+        "testFail": "Mislukt",
+        "testNoSpeaker": "Kies eerst een speaker"
       }
     },
     "summary": {
@@ -1241,7 +1286,7 @@
   },
   "onboarding": {
     "stepLabel": "Stap",
-    "stepOf": "van 4",
+    "stepOf": "van",
     "skip": "Tour overslaan",
     "skipBtn": "Overslaan",
     "nextBtn": "Volgende",
@@ -1454,7 +1499,10 @@
       "copyJson": "Gevalideerde JSON kopiëren",
       "saveLocal": "Lokaal opslaan (v1.1)",
       "copyResult": "Resultaat voor LLM kopiëren",
-      "close": "Sluiten"
+      "close": "Sluiten",
+      "captureIssue": "Deze inzending volgen",
+      "dismissSubmission": "Overslaan",
+      "working": "Bezig…"
     },
     "hints": {
       "promptCopied": "Prompt naar klembord gekopieerd — plak hem in je LLM.",
@@ -1489,6 +1537,16 @@
       "step4": "Klik op <b>Valideren</b> — je ziet ✓/✗ per veld.",
       "warnTitle": "Meer dan ~32 nummers?",
       "warnBody": "ChatGPT &amp; Claude breken grote playlists vaak halverwege af. Splits ze op in <b>batches van 30 nummers</b>: voer de prompt per batch uit en voeg daarna de songs-arrays samen. Breekt ChatGPT af met een onduidelijke foutmelding, dan is bijna altijd de lengte van het antwoord de oorzaak."
+    },
+    "saveLocal": {
+      "success": "Opgeslagen als {filename}. Bij de volgende verversing verschijnt hij in Playlist Hub → Community.",
+      "error": "Opslaan mislukt: {error}"
+    },
+    "submit": {
+      "pasteIssuePrompt": "Rond de issue af op GitHub en plak de URL hier — dan verschijnt hij in je Mine-tab naast je bestaande playlistverzoeken.",
+      "captured": "Vastgelegd als issue #{n}. Volg de voortgang in Playlist Hub → Mine.",
+      "captureError": "Inzending kon niet worden vastgelegd: {error}",
+      "invalidIssueUrl": "Dat lijkt niet op de URL van een GitHub-issue. Verwacht wordt iets als https://github.com/mholzi/beatify/issues/123."
     }
   },
   "starting": {

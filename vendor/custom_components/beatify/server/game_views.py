@@ -6,6 +6,7 @@ import contextlib
 import functools
 import json
 import logging
+from dataclasses import replace
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -14,7 +15,6 @@ from homeassistant.components.http import HomeAssistantView
 from homeassistant.helpers import entity_registry as er
 
 from custom_components.beatify.const import (
-    DEFAULT_ROUND_DURATION,
     DIFFICULTY_DEFAULT,
     DIFFICULTY_EASY,
     DIFFICULTY_HARD,
@@ -23,6 +23,7 @@ from custom_components.beatify.const import (
     ERR_MEDIA_PLAYER_UNAVAILABLE,
     ERR_NO_PLAYABLE_SONGS,
     ERR_NO_PLAYLISTS_SELECTED,
+    MIN_PLAYERS,
     PROVIDER_AMAZON_MUSIC,
     PROVIDER_APPLE_MUSIC,
     PROVIDER_DEEZER,
@@ -32,13 +33,16 @@ from custom_components.beatify.const import (
     PROVIDER_YTMUSIC_FREE,
     PROVIDER_TIDAL,
     PROVIDER_YOUTUBE_MUSIC,
+    REVEAL_AUTO_ADVANCE_OPTIONS,
     ROUND_DURATION_MAX,
     ROUND_DURATION_MIN,
 )
+from custom_components.beatify.game.config import GameOptions
 from custom_components.beatify.game.playlist import (
     async_discover_playlists_detailed,
 )
 from custom_components.beatify.game.state import GamePhase, GameState
+from custom_components.beatify.game.state_setup import NoPlayableSongsError
 from custom_components.beatify.server.ws_handlers._helpers import finalize_and_end
 from custom_components.beatify.server.base import (
     BeatifyAdminView,
@@ -51,6 +55,7 @@ from custom_components.beatify.server.serializers import (
     build_state_message,
 )
 from custom_components.beatify.server.setup_state import clear_setup
+from custom_components.beatify.services.factories import ha_service_factories
 from custom_components.beatify.services.media_player import (
     async_get_native_twin_remap,
     get_platform_capabilities,
@@ -60,6 +65,40 @@ if TYPE_CHECKING:
     from homeassistant.core import HomeAssistant
 
 _LOGGER = logging.getLogger(__name__)
+
+
+def normalize_reveal_auto_advance(value: Any) -> int:
+    """Coerce the client's REVEAL auto-advance to a delay the game can run.
+
+    #1012: 0 means off — the host advances manually, or the round ends when the
+    song does. Anything else must be one of ``REVEAL_AUTO_ADVANCE_OPTIONS``.
+
+    #2626: the allowed delays used to be a literal tuple inside the create-game
+    handler while ``wizard.js`` and ``admin.html`` each kept their own chip
+    list, and a value that fell through this check was replaced by 0 in
+    silence. A chip added to either UI list therefore looked selected while the
+    game ran with auto-advance off, and the host found out at the first reveal.
+    The list now lives in ``const.py``; both chip groups are rendered from the
+    JS mirror of it (``www/js/game-constants.js``), and a rejection is logged
+    rather than swallowed.
+
+    Returns 0 for a missing, unparseable or unsupported value — a party must
+    not fail to start over this setting.
+    """
+    try:
+        seconds = int(value)
+    except (ValueError, TypeError):
+        seconds = 0
+    if seconds not in REVEAL_AUTO_ADVANCE_OPTIONS:
+        if seconds != 0:
+            _LOGGER.warning(
+                "Ignoring unsupported reveal_auto_advance=%r (allowed: %s) — "
+                "auto-advance is off for this game",
+                value,
+                ", ".join(str(v) for v in REVEAL_AUTO_ADVANCE_OPTIONS),
+            )
+        return 0
+    return seconds
 
 
 def _validate_provider(provider: str) -> str:
@@ -189,14 +228,7 @@ class StartGameView(RateLimitMixin, HomeAssistantView):
         party_lights_config = body.get("party_lights")  # Issue #331
         tts_config = body.get("tts")  # Issue #447
 
-        # #1012: REVEAL auto-advance — 0 (off, manual + song-end advance)
-        # or 30/60/90 seconds. Default 0: host stays in control.
-        try:
-            reveal_auto_advance = int(reveal_auto_advance)
-        except (ValueError, TypeError):
-            reveal_auto_advance = 0
-        if reveal_auto_advance not in (0, 30, 60, 90):
-            reveal_auto_advance = 0
+        reveal_auto_advance = normalize_reveal_auto_advance(reveal_auto_advance)
 
         # Validate difficulty (Story 14.1)
         valid_difficulties = (DIFFICULTY_EASY, DIFFICULTY_NORMAL, DIFFICULTY_HARD)
@@ -370,7 +402,10 @@ class StartGameView(RateLimitMixin, HomeAssistantView):
 
         # Initialize game state if needed
         if not game_state:
-            game_state = GameState()
+            # #2638: a composition point, so it wires the HA-backed service
+            # factories just like async_setup_entry does. (Defensive branch:
+            # async_setup_entry always seeds hass.data[DOMAIN]["game"].)
+            game_state = GameState(service_factories=ha_service_factories(self.hass))
             self.hass.data[DOMAIN]["game"] = game_state
             # Connect stats service if available (Story 14.4)
             stats_service = self.hass.data.get(DOMAIN, {}).get("stats")
@@ -441,34 +476,33 @@ class StartGameView(RateLimitMixin, HomeAssistantView):
                 details={"speaker": speaker_name, "provider": "Amazon Music"},
             )
 
-        # Build create_game kwargs with optional round_duration (Story 13.1),
-        # difficulty (Story 14.1), provider (Story 17.2), platform,
-        # and artist_challenge_enabled (Story 20.7)
-        create_kwargs: dict[str, Any] = {
-            "playlists": playlist_paths,
-            "songs": songs,
-            "media_player": media_player,
-            "base_url": base_url,
-            "difficulty": difficulty,
-            "provider": provider,
-            "platform": platform,
-            "artist_challenge_enabled": artist_challenge_enabled,  # Story 20.7
-            "movie_quiz_enabled": movie_quiz_enabled,  # Issue #28
-            "intro_mode_enabled": intro_mode_enabled,  # Issue #23
-            "closest_wins_mode": closest_wins_mode,  # Issue #442
-            "sudden_death_mode": sudden_death_mode,  # Issue #827
-            "title_artist_mode": title_artist_mode,  # #1180
-            "rampup_order_enabled": rampup_order_enabled,  # Issue #1726
-            "finale_double_enabled": finale_double_enabled,  # Issue #1725
-            "finale_tiebreaker_enabled": finale_tiebreaker_enabled,  # Issue #1725
-            "comeback_token_enabled": comeback_token_enabled,  # Issue #1724
-            "difficulty_bet_scaling_enabled": difficulty_bet_scaling_enabled,  # Issue #1727
-            "sabotage_enabled": sabotage_enabled,  # Issue #1665
-            "reveal_auto_advance": reveal_auto_advance,  # #1012
-            "max_rounds": max_rounds,  # #1475
-        }
+        # #2635: the admin's options as ONE object, not a kwargs dict that had
+        # to be kept in step with create_game's parameter list by hand. An
+        # option missing here used to reach create_game as its default with no
+        # error; a wrong name is now a TypeError at construction.
+        # Story 13.1 (round_duration), Story 14.1 (difficulty),
+        # Story 17.2 (provider), Story 20.7 (artist_challenge_enabled).
+        create_options = GameOptions(
+            difficulty=difficulty,
+            provider=provider,
+            platform=platform,
+            artist_challenge_enabled=artist_challenge_enabled,  # Story 20.7
+            movie_quiz_enabled=movie_quiz_enabled,  # Issue #28
+            intro_mode_enabled=intro_mode_enabled,  # Issue #23
+            closest_wins_mode=closest_wins_mode,  # Issue #442
+            sudden_death_mode=sudden_death_mode,  # Issue #827
+            title_artist_mode=title_artist_mode,  # #1180
+            rampup_order_enabled=rampup_order_enabled,  # Issue #1726
+            finale_double_enabled=finale_double_enabled,  # Issue #1725
+            finale_tiebreaker_enabled=finale_tiebreaker_enabled,  # Issue #1725
+            comeback_token_enabled=comeback_token_enabled,  # Issue #1724
+            difficulty_bet_scaling_enabled=difficulty_bet_scaling_enabled,  # Issue #1727
+            sabotage_enabled=sabotage_enabled,  # Issue #1665
+            reveal_auto_advance=reveal_auto_advance,  # #1012
+            max_rounds=max_rounds,  # #1475
+        )
         if round_duration is not None:
-            create_kwargs["round_duration"] = round_duration
+            create_options = replace(create_options, round_duration=round_duration)
 
         # #1867: state the round timer's provenance at the one moment it is
         # decided. The only prior trace was "Round N started (%.1fs timer)",
@@ -478,11 +512,34 @@ class StartGameView(RateLimitMixin, HomeAssistantView):
         # which no log had; one line here makes the next report a lookup.
         _LOGGER.info(
             "Game created with round_duration=%ss (client sent %r)",
-            create_kwargs.get("round_duration", DEFAULT_ROUND_DURATION),
+            create_options.round_duration,
             body.get("round_duration"),
         )
 
-        result = game_state.create_game(**create_kwargs)
+        # #2530: create_game validates before it mutates (#1378) and signals a
+        # rejection by raising. Uncaught, that ValueError left aiohttp to answer
+        # with a bare 500 "Server got itself in trouble" — a response carrying no
+        # code at all, which defeats the whole point of #2294 (every create-game
+        # rejection gets its own code so the client can say WHICH one fired) and
+        # sends the i18n lookup in errors.<CODE> looking for nothing.
+        try:
+            result = game_state.create_game(
+                playlists=playlist_paths,
+                songs=songs,
+                media_player=media_player,
+                base_url=base_url,
+                options=create_options,
+            )
+        except NoPlayableSongsError as err:
+            return _json_error(str(err), 400, code=ERR_NO_PLAYABLE_SONGS)
+        except ValueError as err:
+            # The only other raise in create_game is the round-duration range
+            # check, which the block above already rejects with its own code —
+            # so this arm is a backstop for a future validation, not dead code.
+            # It must not borrow NO_PLAYABLE_SONGS: a wrong code is worse than a
+            # generic one, because the client renders it as a specific sentence.
+            _LOGGER.warning("create_game rejected the request: %s", err)
+            return _json_error(str(err), 400, code="INVALID_REQUEST")
 
         # Crate Digger: install the pre-start hook so the songs
         # are regenerated from the CURRENT settings on the LOBBY -> first
@@ -1211,6 +1268,18 @@ class StartGameplayView(BeatifyAdminView):
 
         if game_state.phase != GamePhase.LOBBY:
             return _json_error("Game already started", 409, code="INVALID_PHASE")
+
+        # #2497: the minimum-player floor. It used to live in
+        # GameState.start_game(), which no production path calls, so a game
+        # could be started alone. Enforced at the two places a *user* starts a
+        # game — here and in the websocket admin handler — rather than inside
+        # start_round(), which runs for every round of every game.
+        if len(game_state.players) < MIN_PLAYERS:
+            return _json_error(
+                f"Need at least {MIN_PLAYERS} players to start",
+                409,
+                code="NOT_ENOUGH_PLAYERS",
+            )
 
         # Issue #827: Sudden Death requires >=3 players. Players join the LOBBY
         # *after* create_game (which clears sessions), so the floor can only be

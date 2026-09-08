@@ -5,8 +5,8 @@
 
 import {
     state, escapeHtml, showConfirmModal,
-    prefersReducedMotion, animateValue, animateScoreChange, showPointsPopup,
-    previousState, isPreviousStateInitialized, isStreakMilestone, detectRankChanges,
+    prefersReducedMotion, animateValue,
+    previousState, isPreviousStateInitialized, detectRankChanges,
     updatePreviousState, AnimationUtils, AnimationQueue,
     LEADERBOARD_LAZY_CONFIG, lazyLeaderboardState,
     initLeaderboardObserver, renderLazyLeaderboardRange,
@@ -334,9 +334,9 @@ export function updateGameView(data) {
         }
     }
 
-    // Issue #827: Sudden Death — gate the play UI on whether the current
-    // player is eliminated. Must run before syncing the chip row / submission
-    // tracker so the eliminated-view album art and locked state are consistent.
+    // Issue #827 / #2612: gate the play UI on whether the current player is
+    // eliminated or sitting out a finale playoff. Must run before syncing the
+    // chip row / submission tracker so the locked state is consistent.
     applySuddenDeathState(data);
 
     // Arcade chip row — hide the wrapper when every child chip is hidden
@@ -443,7 +443,8 @@ function syncArcChipRow() {
         'sabotage-indicator',  // #1665
         'closest-wins-badge',
         'intro-badge',
-        'last-round-banner'
+        'last-round-banner',
+        'song-stopped-chip'  // #2554
     ];
     var anyVisible = childIds.some(function(id) {
         var el = document.getElementById(id);
@@ -468,9 +469,15 @@ function syncNoBonusFiller(data) {
     filler.classList.toggle('hidden', hasArtist || hasMovie || taMode);
 }
 
-// Issue #827: Sudden Death — true when the current player ("me") is eliminated.
-// Used to defensively block submissions and drive the eliminated view.
+// Issue #827 / #2612: true when the current player cannot act in this round.
+// The two server states remain separate for display, but share the client-side
+// submission guard.
 var meEliminated = false;
+var mePlayoffSpectator = false;
+
+function meOutOfPlay() {
+    return meEliminated || mePlayoffSpectator;
+}
 
 /**
  * Find the current player ("me") in a players array. Matches the existing
@@ -512,22 +519,23 @@ export function renderBetPayout(data) {
 }
 
 /**
- * Issue #827: Sudden Death — apply elimination state for the current player.
- * When `sudden_death_mode` is on AND the current player is eliminated, hide the
- * normal play UI (slider, year display, bet, submit, challenges) and show the
- * #eliminated-view. Otherwise restore the normal UI and keep the view hidden.
- * Guarded so a non-Sudden-Death game is completely unaffected.
+ * Issue #827 / #2612: apply the current player's out-of-play state.
+ * Eliminated players and finale-playoff spectators both lose the normal play
+ * UI (slider, year display, bet, submit, challenges), while only a genuine
+ * elimination gets the skull treatment.
  * @param {Object} data - State data from server
  */
 function applySuddenDeathState(data) {
     var eliminatedView = document.getElementById('eliminated-view');
     if (!eliminatedView) return;
 
-    var suddenDeath = !!(data && data.sudden_death_mode);
     var me = findMe(data && data.players);
-    var amOut = suddenDeath && !!(me && me.eliminated);
+    var amEliminated = !!(me && me.eliminated);
+    var amPlayoffSpectator = !!(me && me.playoff_spectator);
+    var amOut = amEliminated || amPlayoffSpectator;
 
-    meEliminated = amOut;
+    meEliminated = amEliminated;
+    mePlayoffSpectator = amPlayoffSpectator;
 
     // Elements that make up the normal active-play UI.
     var playEls = [
@@ -553,14 +561,24 @@ function applySuddenDeathState(data) {
             elimCover.src = albumCover.src;
         }
 
-        // "Eliminated · Round N" — prefer the round they went out on.
+        var titleEl = document.getElementById('eliminated-title');
         var subEl = document.getElementById('eliminated-sub');
-        if (subEl) {
-            var round = (me && me.eliminated_round != null)
-                ? me.eliminated_round
-                : (data && data.round) || '';
-            subEl.textContent = utils.t('game.eliminatedRound', { round: round })
-                || ('Eliminated · Round ' + round);
+        var skull = eliminatedView.querySelector('.eliminated-skull');
+        if (amPlayoffSpectator && !amEliminated) {
+            if (titleEl) titleEl.textContent = utils.t('reveal.finalePlayoff') || 'Finale playoff';
+            if (subEl) subEl.textContent = utils.t('game.watchingSidelines') || 'Watching from the sidelines';
+            if (skull) skull.classList.add('hidden');
+        } else {
+            // "Eliminated · Round N" — prefer the round they went out on.
+            if (titleEl) titleEl.textContent = utils.t('game.youreOut') || "You're out";
+            if (subEl) {
+                var round = (me && me.eliminated_round != null)
+                    ? me.eliminated_round
+                    : (data && data.round) || '';
+                subEl.textContent = utils.t('game.eliminatedRound', { round: round })
+                    || ('Eliminated · Round ' + round);
+            }
+            if (skull) skull.classList.remove('hidden');
         }
 
         // Issue #827: eliminated players are spectators — surface the existing
@@ -577,6 +595,12 @@ function applySuddenDeathState(data) {
             if (el) el.classList.remove('hidden');
         });
         eliminatedView.classList.add('hidden');
+        var restoreTitleEl = document.getElementById('eliminated-title');
+        var restoreSubEl = document.getElementById('eliminated-sub');
+        var restoreSkull = eliminatedView.querySelector('.eliminated-skull');
+        if (restoreTitleEl) restoreTitleEl.textContent = utils.t('game.youreOut') || "You're out";
+        if (restoreSubEl) restoreSubEl.textContent = '';
+        if (restoreSkull) restoreSkull.classList.remove('hidden');
 
         // submitted-banner visibility is owned by handleSubmitAck/reset — it
         // should stay hidden unless this player has submitted. We removed the
@@ -595,11 +619,10 @@ function renderSubmissionTracker(players) {
     if (!tracker || !container) return;
 
     var playerList = players || [];
-    // Issue #827: Sudden Death — eliminated players are out of the round and
-    // must not count toward the "submitted / waiting" totals. activeList is the
-    // set still in play; counts derive from it.
+    // #827 / #2612: eliminated players and playoff spectators are out of the
+    // round and must not count toward the "submitted / waiting" totals.
     var activeList = playerList.filter(function(p) {
-        return !p.eliminated;
+        return !p.eliminated && !p.playoff_spectator;
     });
     var submittedCount = activeList.filter(function(p) {
         return p.submitted;
@@ -639,10 +662,12 @@ function renderSubmissionTracker(players) {
         var isCurrentPlayer = player.name === state.playerName;
         var isDisconnected = player.connected === false;
         var isEliminated = !!player.eliminated;  // Issue #827
+        var isPlayoffSpectator = !!player.playoff_spectator;  // Issue #2612
+        var isOutOfPlay = isEliminated || isPlayoffSpectator;
         var classes = [
             'player-indicator',
-            // Issue #827: eliminated chips never read as "submitted".
-            (player.submitted && !isEliminated) ? 'is-submitted' : '',
+            // #827 / #2612: out-of-play chips never read as "submitted".
+            (player.submitted && !isOutOfPlay) ? 'is-submitted' : '',
             isCurrentPlayer ? 'is-current-player' : '',
             isDisconnected ? 'player-indicator--disconnected' : '',
             isEliminated ? 'is-eliminated' : ''
@@ -972,7 +997,7 @@ export function initYearSelector() {
     yearSelectorInitialized = true;  // #854 — set only after DOM was found
 
     slider.addEventListener('input', function() {
-        if (meEliminated) return;  // Issue #827: eliminated players can't change the year
+        if (meOutOfPlay()) return;  // #827 / #2612: out-of-play players can't act
         yearDisplay.textContent = this.value;
     });
 
@@ -997,7 +1022,7 @@ export function initYearSelector() {
         var longPressTimeoutId = null;
 
         btn.addEventListener('pointerdown', function(e) {
-            if (hasSubmitted || meEliminated) return;  // Issue #827
+            if (hasSubmitted || meOutOfPlay()) return;  // #827 / #2612
             e.preventDefault();
             adjustYear(delta);
             longPressTimeoutId = setTimeout(function() {
@@ -1015,7 +1040,7 @@ export function initYearSelector() {
 
         // Keyboard fallback (Space / Enter when the button has focus)
         btn.addEventListener('keydown', function(e) {
-            if (hasSubmitted || meEliminated) return;  // Issue #827
+            if (hasSubmitted || meOutOfPlay()) return;  // #827 / #2612
             if (e.key === 'Enter' || e.key === ' ') {
                 e.preventDefault();
                 adjustYear(delta);
@@ -1116,7 +1141,7 @@ export function initYearSelector() {
  */
 export function handleSubmitGuess() {
     if (hasSubmitted) return;
-    if (meEliminated) return;  // Issue #827: eliminated players can't submit
+    if (meOutOfPlay()) return;  // #827 / #2612: out-of-play players can't submit
 
     // #1665: freeze effect — the server rejects the submit with ERR_FROZEN, so
     // reflect that locally instead of firing a doomed request. A short toast
@@ -1229,8 +1254,29 @@ export function handleSubmitError(data) {
     } else if (data.code === 'ALREADY_SUBMITTED') {
         handleSubmitAck();
     } else {
-        showSubmitError(data.message || 'Submission failed');
+        // #2553: the server's English prose used to land under the player's
+        // thumb — a sabotaged guest at a German party read "Frozen — hold on".
+        // Same fix as #2532 did for the join rejection: translate by code and
+        // keep the server text only as the last fallback.
+        showSubmitError(errorText(data));
     }
+}
+
+/**
+ * Translate a server error to the player's language (#2553).
+ *
+ * Order: the code's own translation, then the server's message, then a generic
+ * line — so a code the frontend has never heard of still says something.
+ */
+function errorText(data) {
+    var code = data && data.code;
+    if (code) {
+        var translated = utils.t('errors.' + code);
+        // utils.t returns the key itself when it does not know it.
+        if (translated && translated !== 'errors.' + code) return translated;
+    }
+    return (data && data.message)
+        || utils.t('errors.submissionFailed', 'Submission failed');
 }
 
 /**
@@ -1243,7 +1289,12 @@ export function showSubmitError(message) {
         submitBtn.textContent = message;
         submitBtn.classList.add('is-error');
         setTimeout(function() {
-            submitBtn.textContent = utils.t('game.submitGuess');
+            // #2553: restoring the year-mode label in Title & Artist mode left
+            // the button reading "Submit Guess" where it should read the
+            // mode's own label.
+            submitBtn.textContent = titleArtistMode
+                ? utils.t('titleArtist.submitGuess')
+                : utils.t('game.submitGuess');
             submitBtn.classList.remove('is-error');
         }, 2000);
     }
@@ -1348,7 +1399,7 @@ export function renderTitleArtistInput(data) {
     // before this in updateGameView and has hidden the play UI + shown the
     // blackout view; don't re-show any year/TA/bet control here regardless of
     // mode, or the controls leak in next to the eliminated-view.
-    if (meEliminated) {
+    if (meOutOfPlay()) {
         if (taContainer) taContainer.classList.add('hidden');
         if (yearWrap) yearWrap.classList.add('hidden');
         if (yearXxl) yearXxl.classList.add('hidden');
@@ -1379,7 +1430,7 @@ export function renderTitleArtistInput(data) {
  */
 export function handleTitleArtistSubmit() {
     if (hasSubmitted) return;
-    if (meEliminated) return;  // Issue #827: eliminated players can't submit
+    if (meOutOfPlay()) return;  // #827 / #2612: out-of-play players can't submit
 
     var titleInput = document.getElementById('ta-title-input');
     var artistInput = document.getElementById('ta-artist-input');
@@ -1595,7 +1646,10 @@ function buildStealTargetAria(name, entry, isLeader) {
     var parts = [name];
     if (entry.rank != null) parts.push('#' + entry.rank);
     if (entry.score != null) parts.push(formatStealScore(entry.score));
-    if (isLeader) parts.push(utils.t('leaderboard.leader') || 'leader');
+    // #2507: t() returns the key itself on a miss, never a falsy value, so the
+    // old `|| 'leader'` was dead code and the steal modal's aria-label ended in
+    // the raw key. The key now exists in all six locales.
+    if (isLeader) parts.push(utils.t('leaderboard.leader'));
     return parts.join(' · ');
 }
 
@@ -2173,6 +2227,42 @@ export function showFloatingReaction(senderName, emoji) {
 }
 
 /**
+ * Show the host's way out of a paused game (#2551).
+ *
+ * The player screen hides the admin control bar in PAUSED, so a host who
+ * joined from their phone saw the same spinner as everyone else with no
+ * resume, no end, and no link to the page that has both. `resume_game` and
+ * `end_game` have accepted PAUSED server-side all along.
+ */
+export function renderPausedAdminActions() {
+    var box = document.getElementById('paused-admin-actions');
+    if (!box) return;
+    box.classList.toggle('hidden', !state.isAdmin);
+    if (!state.isAdmin || box.dataset.wired === '1') return;
+    box.dataset.wired = '1';
+
+    var resumeBtn = document.getElementById('paused-resume-btn');
+    if (resumeBtn) resumeBtn.addEventListener('click', handleResumeGame);
+    var endBtn = document.getElementById('paused-end-btn');
+    if (endBtn) endBtn.addEventListener('click', handleEndGame);
+}
+
+/**
+ * Resume a paused game from the player screen (#2551).
+ */
+function handleResumeGame() {
+    if (!debounceAdminAction()) return;
+    if (!state.ws || state.ws.readyState !== WebSocket.OPEN) {
+        showToast(utils.t('errors.CONNECTION_LOST'));
+        return;
+    }
+    state.ws.send(JSON.stringify({
+        type: 'admin',
+        action: 'resume_game'
+    }));
+}
+
+/**
  * Update control bar button states based on phase
  * @param {string} phase - Current game phase
  */
@@ -2353,7 +2443,8 @@ async function handleEndGame() {
 
 // Debounce state to prevent rapid clicks
 var nextRoundPending = false;
-var NEXT_ROUND_DEBOUNCE_MS = 2000;
+// #2583: NEXT_ROUND_DEBOUNCE_MS was declared here and never read —
+// handleNextRound guards with a flag and its own 10s timeout.
 
 /**
  * Handle next round button click
@@ -2444,6 +2535,14 @@ export function setupAdminControlBar() {
  */
 export function handleSongStopped() {
     songStopped = true;
+    // #2554: tell the room, not just the host. Everyone else hears the music
+    // stop with the timer still running and has no way to know it was
+    // deliberate.
+    var chip = document.getElementById('song-stopped-chip');
+    if (chip) {
+        chip.classList.remove('hidden');
+        syncArcChipRow();
+    }
     var stopBtn = document.getElementById('stop-song-btn');
     if (stopBtn) {
         stopBtn.classList.add('is-stopped');
@@ -2461,6 +2560,11 @@ export function handleSongStopped() {
  */
 export function resetSongStoppedState() {
     songStopped = false;
+    var chip = document.getElementById('song-stopped-chip');
+    if (chip) {
+        chip.classList.add('hidden');
+        syncArcChipRow();
+    }
     var stopBtn = document.getElementById('stop-song-btn');
     if (stopBtn) {
         stopBtn.classList.remove('is-stopped');
@@ -2479,8 +2583,32 @@ export function resetSongStoppedState() {
  */
 export function handleVolumeChanged(level) {
     currentVolume = level;
+    renderVolumeReadout(level);
     showVolumeIndicator(level);
     updateVolumeLimitStates(level);
+}
+
+/**
+ * Adopt the speaker's real level from a state broadcast (#2557).
+ *
+ * Without this the host's phone assumed 0.5 until their first tap: the level
+ * only ever came back in reply to their own button press. That made the first
+ * press blind and the at-the-limit guard wrong from the start.
+ */
+export function syncVolumeFromState(data) {
+    if (!data || typeof data.volume_level !== 'number') return;
+    currentVolume = data.volume_level;
+    renderVolumeReadout(currentVolume);
+    updateVolumeLimitStates(currentVolume);
+}
+
+/**
+ * Keep the percentage between the two buttons up to date (#2557).
+ */
+function renderVolumeReadout(level) {
+    var el = document.getElementById('volume-readout');
+    if (!el) return;
+    el.textContent = Math.round(level * 100) + '%';
 }
 
 /**

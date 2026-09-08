@@ -3,10 +3,16 @@
  * Vanilla JS - no frameworks
  *
  * #1279 Schritt 2/6: admin.js is now an ES module (`<script type="module">`).
- * Pure helpers live in ./admin/util.js; their previous top-level globals are
- * re-exposed on `window` below (compat shim) for classic scripts that still
- * read them. Token helpers read the live `adminState.currentGame` via a resolver
- * registered once at module init.
+ * Pure helpers live in ./admin/util.js. Token helpers read the live
+ * `adminState.currentGame` via a resolver registered once at module init.
+ *
+ * #2637: this file used to publish 14 names on `window` and the extracted
+ * sections called back through six of them. Six were dead, one was a section's
+ * own export routed out and back, one was never defined by anyone, and the two
+ * config getters belonged to classic scripts that are now bundle modules. The
+ * six that remain are listed in full below, next to the shim block they
+ * replaced; all six cross to a separate entry point, none of them to a sibling
+ * module.
  */
 
 // #1279 Schritt 5/6: centralized mutable setup-/game-state. Previously the ~24
@@ -23,6 +29,9 @@ import { adminState } from './admin/state.js';
 // #1279 step 4b: shared constants (localStorage keys) extracted so both this
 // core and the setup-section modules import the same literals.
 import { STORAGE_LAST_PLAYER, STORAGE_GAME_SETTINGS } from './admin/constants.js';
+// #2626/#2627: the values that must match the server. One mirror of const.py
+// for the whole frontend — see js/game-constants.js.
+import { MAX_NAME_LENGTH } from './game-constants.js';
 // #1927: reconcile the server-side setup blob with this browser's localStorage
 // so a stale local speaker can no longer outlive a newer pick from another device.
 import { reconcileSavedSetup, speakerLabelFor } from './admin/setup-sync.js';
@@ -42,10 +51,6 @@ import {
     setCurrentGameResolver,
     _getAdminToken,
     _setAdminToken,
-    _adminHeaders,
-    groupPlayersByPlatform,
-    REQUEST_STATUS_LABELS,
-    buildRequestRowHtml,
     escapeHtml,
     errorHeadlineAndDetail,
     acquireWakeLockFirst,
@@ -55,6 +60,9 @@ import {
     createRenderCoalescer,
     adminStateEqual,
     bannerAnchorFor,
+    tr,
+    buildHomeMeta,
+    adminJoinNameValid,
 } from './admin/util.js';
 
 // #1279 Schritt 3/6: REST/WS hub layer. The admin WS connection lifecycle +
@@ -94,12 +102,11 @@ import {
 // playlists.js: list render + selection + tag-filter, plus the shared
 // selection-summary / start-button-validation helpers. The intra-section
 // callees (handlePlaylistToggle, filter-bar render, etc.) are wired up inside
-// the module; admin.js core only drives the entry points below.
-// `clearPlaylistFilters` is shimmed onto `window` (below) for the inline
-// `onclick=` in the HTML the module generates.
+// the module; admin.js core only drives the entry points below. Since #2637 it
+// also wires its own "clear the filters" buttons, so nothing of it has to be
+// held on `window` by this file.
 import {
     renderPlaylists,
-    clearPlaylistFilters,
     updateStartButtonState,
 } from './admin/sections/playlists.js';
 
@@ -113,12 +120,14 @@ import {
 } from './admin/sections/mix.js';
 
 // media-players.js: speaker list render + radio-selection + platform-capability
-// gate (updateProviderOptions toggles the music-service provider chips). No
-// window shim: the no-players empty state's inline onclick="loadStatus()" resolves
-// to the loadStatus core fn already shimmed onto window below. admin.js core
-// drives renderMediaPlayers (from loadStatus) + handleMediaPlayerSelect (from
+// gate (updateProviderOptions toggles the music-service provider chips).
+// #2637: the no-players empty state's Refresh button used to be an inline
+// onclick="loadStatus()" resolved through a window shim; it now runs on the
+// `refreshStatus` handed to initMediaPlayers() at init. admin.js core drives
+// renderMediaPlayers (from loadStatus) + handleMediaPlayerSelect (from
 // BeatifyHome.hydrateFromStorage); the rest are intra-section.
 import {
+    initMediaPlayers,
     renderMediaPlayers,
     handleMediaPlayerSelect,
     expandMediaPlayersSection,
@@ -139,9 +148,14 @@ import {
 // qr-modal.js: the tap-to-enlarge join-QR modal. admin.js init calls
 // setupQRModal() once; the home-view handlers call openQRModal() (still behind
 // their `typeof openQRModal === 'function'` guards). closeQRModal is internal.
+// #2621 added the in-game triggers: setupInviteTriggers() wires the PLAYING and
+// REVEAL header buttons to the same modal, syncInviteTriggers() hides them
+// while no join URL is cached.
 import {
     openQRModal,
     setupQRModal,
+    setupInviteTriggers,
+    syncInviteTriggers,
 } from './admin/sections/qr-modal.js';
 // force-reset.js: the emergency #777 recovery modal (no admin token needed).
 // Only setupResetModal() crosses the module boundary (admin.js init); show/
@@ -150,26 +164,48 @@ import {
     setupResetModal,
 } from './admin/sections/force-reset.js';
 
+// #2637: the TTS + party-lights setup sections. Both used to be classic
+// <script> tags at the very bottom of admin.html that published their config
+// getter on `window` for this file to read back when a game starts. That
+// handshake depended on the order of two script tags and on nothing at all
+// verifying it — the #1263 failure mode. They are ES modules now, so the
+// start-game payload is built from real imports and `npm run build:check`
+// covers their source.
+import { ttsConfig } from './tts-settings.js';
+import { partyLightsConfig } from './party-lights.js';
+
 // Token helpers in util.js need the live `currentGame`. The resolver reads it
 // off the shared `adminState` object (#1279 step 5), so it stays in sync across
 // every `adminState.currentGame = …` without touching each assignment site.
 setCurrentGameResolver(() => adminState.currentGame);
 
-// Compat shim (#1279 step 2): admin.js is now a module, so its top-level
-// helper declarations are no longer global. Classic scripts loaded after this
-// module (party-lights.min.js, tts-settings.js) and module siblings that read
-// these by name keep working by reading them off `window`. These helpers were
-// implicitly global before the module migration; the shim makes that explicit.
-window.escapeHtml = escapeHtml;
-window.groupPlayersByPlatform = groupPlayersByPlatform;
-window.buildRequestRowHtml = buildRequestRowHtml;
-window._getAdminToken = _getAdminToken;
-window._setAdminToken = _setAdminToken;
-window._adminHeaders = _adminHeaders;
-// #1279 step 4b: playlists.js generates HTML with inline onclick="clearPlaylistFilters()"
-// (empty-filter "Clear Filters" button + active-filter "Clear" link), so the
-// function must stay reachable as a window global.
-window.clearPlaylistFilters = clearPlaylistFilters;
+// #2637: the six helper shims that used to sit here (escapeHtml,
+// groupPlayersByPlatform, buildRequestRowHtml, _getAdminToken, _setAdminToken,
+// _adminHeaders) are gone. The comment claimed party-lights.js and
+// tts-settings.js read them by name; neither ever did — party-lights.js carries
+// its own escapeHtml (party-lights.js:7) and no file in www/ reads any of the
+// six off `window`. They were dead weight that made admin.js look like a
+// dependency of scripts that do not depend on it.
+//
+// What this file still publishes on `window`, and why — the whole list, so the
+// next person does not have to grep for it:
+//
+//   window.loadStatus                 ← wizard.js (refresh after the wizard finishes)
+//   window.loadSavedSettings          ← wizard.js (re-read the settings it just wrote)
+//   window.BeatifyHome                ← wizard.js (enter/refresh the home view)
+//   window.BeatifyPersistSetup        ← wizard.js (publish the host's picks)
+//   window.BeatifyNoteLocalSetupWrite ← wizard.js (stamp a local-only setup write)
+//   window.BEATIFY_VERSION            ← playlist-requests.js (version gate)
+//
+// Every one of them crosses from this bundle to a script the page loads as its
+// own entry point (`<script type="module" src="wizard.js">`,
+// `<script src="playlist-requests.min.js">`). Those cannot import from
+// admin.min.js — an import would fetch a second copy of the module with its own
+// state — so `window` is the only channel available and this is a boundary
+// between entry points, not the cycle #2637 was about. Nothing under
+// `./admin/` reads any of them; `__tests__/admin-section-independence-2637.test.js`
+// fails if that changes. Every read above is event-driven (after
+// DOMContentLoaded, or on a click), so the deferred module has always run first.
 
 // Screen Wake Lock (#622, #1122)
 // Layer 1: navigator.wakeLock — Safari ≥16.4, Chrome, Edge, Firefox.
@@ -618,32 +654,6 @@ document.addEventListener('DOMContentLoaded', async () => {
             try {
                 const raw = localStorage.getItem(STORAGE_GAME_SETTINGS);
                 const s = raw ? JSON.parse(raw) : {};
-                const pls = Array.isArray(s.selectedPlaylists) ? s.selectedPlaylists : [];
-                // Crate Digger generates its playlist from the host's own
-                // library at game start, so it never selects one — "no
-                // playlist" would misreport a fully configured setup.
-                // The persisted blob uses `provider`; `selectedProvider` is
-                // only the in-memory name in adminState. Accept both so a
-                // half-migrated blob can't misreport the setup.
-                const isLib = (s.provider || s.selectedProvider) === 'ma_library';
-                const playlistLabel = isLib
-                    ? (window.BeatifyI18n?.t('admin.home.libraryPlaylistLabel') || 'your library')
-                    : pls.length === 0 ? 'no playlist'
-                    : pls.length === 1 ? (pls[0].path || pls[0]).split('/').pop().replace('.json', '').replace(/-/g, ' ')
-                    : `${pls.length} playlists`;
-                const autoAdv = typeof s.revealAutoAdvance === 'number' ? s.revealAutoAdvance : 0;
-                const autoLabel = autoAdv > 0 ? `${autoAdv}s` : 'Off';
-                // #1867: once a game exists, show the duration the SERVER is
-                // running (`active_game.round_duration`), not what this browser
-                // intends to send. `round_duration` is fixed at create_game and
-                // no endpoint changes it afterwards, so every settings edit made
-                // after the lobby was minted is inert — yet the chip used to
-                // render the new value as though it had taken effect. Reading
-                // client-side state (the previous fix) could not close that gap
-                // because the wizard rewrites that same state post-create.
-                // When the two disagree, both are shown: the number in force,
-                // and what the next game will use.
-                const mode = `${s.difficulty || 'normal'} · ${roundDurationLabel(adminState)} · ${(s.language || 'en').toUpperCase()} · ⏭️ ${autoLabel}`;
                 // #1927: name the speaker that will actually be played on. The
                 // wrong-room bug was invisible precisely because no screen ever
                 // said which entity the game targets — it took a log dive to
@@ -651,7 +661,30 @@ document.addEventListener('DOMContentLoaded', async () => {
                 const speakerId = (adminState.selectedMediaPlayer && adminState.selectedMediaPlayer.entityId)
                     || localStorage.getItem(STORAGE_LAST_PLAYER)
                     || '';
-                const meta = `${speakerLabelFor(speakerId, adminState.mediaPlayers)} · ${playlistLabel} · ${mode}`;
+                // #2620: the whole line is assembled by buildHomeMeta so every
+                // fragment goes through i18n. It used to be half German, half
+                // English literals ("… · 3 playlists · normal · … · ⏭️ Off").
+                //
+                // #1867: once a game exists, `roundDurationLabel` shows the
+                // duration the SERVER is running (`active_game.round_duration`),
+                // not what this browser intends to send. `round_duration` is
+                // fixed at create_game and no endpoint changes it afterwards, so
+                // every settings edit made after the lobby was minted is inert —
+                // yet the chip used to render the new value as though it had
+                // taken effect. When the two disagree, both are shown.
+                //
+                // The persisted blob uses `provider`; `selectedProvider` is only
+                // the in-memory name in adminState. Accept both so a
+                // half-migrated blob can't misreport the setup.
+                const meta = buildHomeMeta({
+                    speakerLabel: speakerLabelFor(speakerId, adminState.mediaPlayers, tr),
+                    playlists: s.selectedPlaylists,
+                    isLibrary: (s.provider || s.selectedProvider) === 'ma_library',
+                    difficulty: s.difficulty,
+                    roundDurationLabel: roundDurationLabel(adminState),
+                    language: s.language,
+                    revealAutoAdvance: s.revealAutoAdvance,
+                }, tr);
                 const metaEl = document.getElementById('home-meta');
                 if (metaEl) metaEl.textContent = meta;
             } catch (e) { /* ignore */ }
@@ -781,7 +814,14 @@ document.addEventListener('DOMContentLoaded', async () => {
 
     // #1538: Smart Playlist Mixer "Mix" tab. Inject startGame so the mixer
     // funnels through the validated start-game path after assembling its set.
-    initMixTab({ startGame });
+    // #2637: refreshStatus goes in the same way — the mixer needs a status
+    // reload after "save as community playlist" and used to reach for
+    // window.loadStatus.
+    initMixTab({ startGame, refreshStatus: loadStatus });
+
+    // #2637: the media-players section's "no compatible players → Refresh"
+    // button. Same reason, same shape.
+    initMediaPlayers({ refreshStatus: loadStatus });
 
     // #1402 B7: one document-level Escape handler for all registered modals.
     // Wire it before the per-modal setups so their registerModalClose() calls
@@ -791,6 +831,11 @@ document.addEventListener('DOMContentLoaded', async () => {
     // QR modal close/backdrop/escape — wired once at init so the home-view
     // tap-to-enlarge and the admin-playing-view both share the same modal.
     setupQRModal();
+
+    // #2621: the same modal, reachable from the running game. The home-view
+    // trigger disappears with home-mode, so PLAYING and REVEAL carry their own
+    // button in the round header.
+    setupInviteTriggers();
 
     // Admin join setup
     setupAdminJoin();
@@ -1307,8 +1352,8 @@ async function startGame() {
                 comeback_token_enabled: adminState.comebackTokenEnabled,  // Issue #1724
                 difficulty_bet_scaling_enabled: adminState.difficultyBetScalingEnabled,  // Issue #1727
                 sabotage_enabled: adminState.sabotageEnabled,  // Issue #1665
-                party_lights: window._partyLightsConfig ? window._partyLightsConfig() : null,  // Issue #331
-                tts: window._ttsConfig ? window._ttsConfig() : null,
+                party_lights: partyLightsConfig(),  // Issue #331
+                tts: ttsConfig(),
                 library: (typeof getLibraryConfig === 'function') ? getLibraryConfig() : null,  // Issue #447
             })
         });
@@ -1377,7 +1422,7 @@ async function startGame() {
         connectAdminWebSocket();
 
     } catch (err) {
-        showError('Network error. Please try again.');
+        showError(tr('errors.networkRetry', 'Network error. Please try again.'));
         console.error('Start game error:', err);
     } finally {
         adminState._startInFlight = false;  // #1365: release the in-flight guard
@@ -1426,8 +1471,8 @@ async function startGameplay() {
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
                 media_player: (adminState.selectedMediaPlayer || {}).entityId || null,
-                tts: window._ttsConfig ? window._ttsConfig() : null,
-                party_lights: window._partyLightsConfig ? window._partyLightsConfig() : null,
+                tts: ttsConfig(),
+                party_lights: partyLightsConfig(),
             }),
         });
     } catch (e) { /* never block the start on a failed push */ }
@@ -1462,7 +1507,7 @@ async function startGameplay() {
         await loadStatus();
 
     } catch (err) {
-        showError('Network error. Please try again.');
+        showError(tr('errors.networkRetry', 'Network error. Please try again.'));
         console.error('Start gameplay error:', err);
     } finally {
         if (btn && originalHTML != null) {
@@ -1646,7 +1691,7 @@ async function confirmEndGame() {
         }
     } catch (err) {
         console.error('End game error:', err);
-        showError('Network error. Please try again.');
+        showError(tr('errors.networkRetry', 'Network error. Please try again.'));
     }
 }
 
@@ -1828,7 +1873,12 @@ function showSpeakerSetupError(message) {
 function openAdminJoinModal() {
     // Issue #477: If already joined inline, just show a toast
     if (adminState.isPlaying && adminState.adminPlayerName) {
-        showError(BeatifyI18n.t('admin.alreadyJoined') || 'Already joined as ' + adminState.adminPlayerName);
+        // #2507: `|| fallback` never fires — t() returns the key itself on a
+        // miss, never a falsy value — so tapping Join twice showed the literal
+        // "admin.alreadyJoined". The key now exists in all six locales, with
+        // the name as a parameter; English is the backstop for a locale that
+        // ever lacks it, and test_i18n_keys_exist_2507.py is the guard.
+        showError(utils.t('admin.alreadyJoined', { name: adminState.adminPlayerName }));
         return;
     }
 
@@ -1869,7 +1919,7 @@ function resetAdminJoinModalState() {
     if (joinBtn) {
         joinBtn.textContent = BeatifyI18n.t('admin.join');
         const name = nameInput ? nameInput.value.trim() : '';
-        joinBtn.disabled = !name || name.length > 20;
+        joinBtn.disabled = !adminJoinNameValid(name);
     }
     if (errorMsg) {
         errorMsg.classList.add('hidden');
@@ -1903,9 +1953,13 @@ function setupAdminJoin() {
     cancelBtn?.addEventListener('click', closeAdminJoinModal);
     backdrop?.addEventListener('click', closeAdminJoinModal);
 
+    // #2627: the field caps at the same number the server does — set from the
+    // shared constant rather than a `maxlength` attribute in admin.html, which
+    // no server-side change could have reached.
+    if (nameInput) nameInput.maxLength = MAX_NAME_LENGTH;
+
     nameInput?.addEventListener('input', function() {
-        const name = this.value.trim();
-        joinBtn.disabled = !name || name.length > 20;
+        joinBtn.disabled = !adminJoinNameValid(this.value.trim());
     });
 
     nameInput?.addEventListener('keypress', function(e) {
@@ -2040,163 +2094,18 @@ function handleAdminJoin() {
     }
 }
 
-/**
- * Setup language selector buttons (Story 12.4)
- */
-function setupLanguageSelector() {
-    var langButtons = document.querySelectorAll('.lang-btn');
-
-    langButtons.forEach(function(btn) {
-        btn.addEventListener('click', function() {
-            var lang = btn.getAttribute('data-lang');
-            if (lang && lang !== adminState.selectedLanguage) {
-                setLanguage(lang);
-            }
-        });
-    });
-}
-
-/**
- * Update language button states (Story 12.4)
- * @param {string} lang - Language code ('en', 'de', or 'es')
- */
-function updateLanguageButtons(lang) {
-    var langButtons = document.querySelectorAll('.lang-btn');
-    langButtons.forEach(function(btn) {
-        var btnLang = btn.getAttribute('data-lang');
-        if (btnLang === lang) {
-            btn.classList.add('lang-btn--active');
-        } else {
-            btn.classList.remove('lang-btn--active');
-        }
-    });
-}
-
-/**
- * Set language and update UI (Story 12.4, 16.3)
- * @param {string} lang - Language code ('en', 'de', or 'es')
- */
-async function setLanguage(lang) {
-    if (lang !== 'en' && lang !== 'de' && lang !== 'es') {
-        lang = 'en';
-    }
-
-    adminState.selectedLanguage = lang;
-    updateLanguageButtons(lang);
-
-    // Update i18n and re-render page
-    await BeatifyI18n.setLanguage(lang);
-    BeatifyI18n.initPageTranslations();
-}
-
-// #1867: the flat-admin timer selector (`setupTimerSelector`,
-// `updateTimerButtons`, `setTimerDuration`) lived here and was removed. It
-// bound to `.timer-btn`, which no longer appears in any template — the wizard
-// uses `.chip[data-duration]` in admin/sections/game-settings.js. So it was
-// unreachable: `setupTimerSelector` had no caller and `setTimerDuration` was
-// only ever called from the listener it installed.
-//
-// It is called out rather than deleted quietly because its "clamp anything
-// non-numeric to exactly 30" line was the prime suspect for #1867's 30s timer,
-// and a reader tracing that bug should learn here that the code could not run.
-// The clamp behaviour it stood for is replaced by `normalizeRoundDuration` in
-// admin/util.js, which returns null instead of substituting a value.
-// The matching `.timer-btn` CSS in styles.css is likewise dead.
-
-// ==========================================
-// Difficulty Selector Functions (Story 14.1)
-// ==========================================
-
-/**
- * Setup difficulty selector buttons
- */
-function setupDifficultySelector() {
-    var difficultyButtons = document.querySelectorAll('.difficulty-btn');
-
-    difficultyButtons.forEach(function(btn) {
-        btn.addEventListener('click', function() {
-            var difficulty = btn.getAttribute('data-difficulty');
-            if (difficulty && difficulty !== adminState.selectedDifficulty) {
-                setDifficulty(difficulty);
-            }
-        });
-    });
-}
-
-/**
- * Update difficulty button states
- * @param {string} difficulty - Difficulty level ('easy', 'normal', or 'hard')
- */
-function updateDifficultyButtons(difficulty) {
-    var difficultyButtons = document.querySelectorAll('.difficulty-btn');
-    difficultyButtons.forEach(function(btn) {
-        var btnDifficulty = btn.getAttribute('data-difficulty');
-        if (btnDifficulty === difficulty) {
-            btn.classList.add('difficulty-btn--active');
-        } else {
-            btn.classList.remove('difficulty-btn--active');
-        }
-    });
-}
-
-/**
- * Set difficulty level and update UI
- * @param {string} difficulty - Difficulty level ('easy', 'normal', or 'hard')
- */
-function setDifficulty(difficulty) {
-    // Validate difficulty
-    var validDifficulties = ['easy', 'normal', 'hard'];
-    if (validDifficulties.indexOf(difficulty) === -1) {
-        difficulty = 'normal';
-    }
-
-    adminState.selectedDifficulty = difficulty;
-    updateDifficultyButtons(difficulty);
-}
-
-/**
- * Update difficulty badge in lobby view
- * @param {string} difficulty - Difficulty level ('easy', 'normal', or 'hard')
- */
-function updateLobbyDifficultyBadge(difficulty) {
-    var badge = document.getElementById('lobby-difficulty-badge');
-    if (!badge) return;
-
-    var labelKey = {
-        easy: 'game.difficultyEasy',
-        normal: 'game.difficultyNormal',
-        hard: 'game.difficultyHard'
-    }[difficulty] || 'game.difficultyNormal';
-
-    var label = utils.t(labelKey);
-    badge.textContent = label;
-    badge.className = 'difficulty-badge difficulty-badge--' + (difficulty || 'normal');
-}
-
-// ==========================================
-// Artist Challenge Toggle Functions (Story 20.7)
-// ==========================================
-
-/**
- * Setup artist challenge toggle
- */
-function setupArtistChallengeToggle() {
-    var toggle = document.getElementById('artist-challenge-toggle');
-    if (!toggle) return;
-
-    // Load saved preference
-    var saved = localStorage.getItem('beatify_artist_challenge');
-    if (saved !== null) {
-        adminState.artistChallengeEnabled = saved === 'true';
-        toggle.checked = adminState.artistChallengeEnabled;
-    }
-
-    toggle.addEventListener('change', function() {
-        adminState.artistChallengeEnabled = toggle.checked;
-        // Save preference
-        localStorage.setItem('beatify_artist_challenge', adminState.artistChallengeEnabled.toString());
-    });
-}
+// #1867/#2583: the flat-admin language, difficulty and artist-challenge
+// controls lived here — `setupLanguageSelector`, `setLanguage`,
+// `updateLanguageButtons`, `setupDifficultySelector`, `setDifficulty`,
+// `updateDifficultyButtons`, `updateLobbyDifficultyBadge` and
+// `setupArtistChallengeToggle`, together with the timer selector removed
+// in #1867. They bound to `.lang-btn`, `.timer-btn` and `.difficulty-btn`,
+// none of which appear in any template: admin.html uses `.chip[data-lang]`
+// / `.chip[data-difficulty]`, wired in admin/sections/game-settings.js,
+// and the artist-challenge checkbox is bound there too. Not one of them
+// had a caller, and esbuild already dropped them from admin.min.js — so
+// nothing shipped changes here. The matching `.lang-btn*`,
+// `.timer-btn*` and `.difficulty-btn*` rules in styles.css go with them.
 
 // ==========================================
 // Lobby Player List Functions (Story 16.8)
@@ -2617,6 +2526,12 @@ function handleAdminStateUpdate(data) {
     // render is deferred and coalesced. renderAdminState re-assigns the same
     // value when it flushes — idempotent.
     adminState.currentGame = data;
+    // #2621: keep the join URL alive past the lobby. It used to be captured only
+    // by the home-view renderer, so a host who reloaded mid-game had a cache of
+    // null and the invite modal opened onto nothing. The serializer sends
+    // join_url in LOBBY, PLAYING and REVEAL (game/serializers.py), so take it
+    // from the state frame itself.
+    if (data && data.join_url) adminState.cachedQRUrl = data.join_url;
     // #1715: a fresh state broadcast means the last in-game control command was
     // processed — release the in-flight guard so Next/Stop/Volume are live again.
     releaseAllAdminControls();
@@ -2687,6 +2602,9 @@ function showAdminPlayingView(data) {
     // Show fixed control bar (matches player admin-control-bar)
     var controlBar = document.getElementById('admin-control-bar');
     if (controlBar) controlBar.classList.remove('hidden');
+
+    // #2621: invite button in the round header — only once a join URL is known.
+    syncInviteTriggers();
 
     // Round info (player-style separate spans)
     var roundEl = document.getElementById('admin-current-round');
@@ -2875,6 +2793,9 @@ function showAdminRevealView(data) {
     // #1048: replace the Next button icon with a 1-Hz auto-advance countdown
     // when one is running. Idle-halt and Off both keep the plain icon.
     _updateRevealAdvanceCountdown(data);
+
+    // #2621: invite button in the reveal header — only once a join URL is known.
+    syncInviteTriggers();
 
     // Emotion display (summary for spectator admin)
     var emotionEl = document.getElementById('admin-reveal-emotion');
@@ -3195,6 +3116,21 @@ function showAdminEndView(data) {
             var scoreEl = document.getElementById('admin-podium-' + i + '-score');
             if (nameEl) nameEl.textContent = entry ? entry.name : '---';
             if (scoreEl) scoreEl.textContent = entry ? entry.score : '0';
+
+            // #2534: hide a stand nobody is on. player-end.js and dashboard.js
+            // have done this since #2130; the host's own screen was the one
+            // view that kept showing "---" and 0 on an empty plinth.
+            //
+            // This uses `hidden` and not dashboard.js's `podium-place--empty`
+            // on purpose: that class's only rule lives in dashboard.css, which
+            // admin.html does not load. Copying the class here would look like
+            // a fix and change nothing on screen. `hidden` is what player-end.js
+            // uses, and it works on both pages because styles.css — the sheet
+            // admin.html does load — declares `.hidden { display: none
+            // !important }`, which beats .podium-place's display:flex.
+            var placeEl = (nameEl || scoreEl);
+            placeEl = placeEl && placeEl.closest ? placeEl.closest('.podium-place') : null;
+            if (placeEl) placeEl.classList.toggle('hidden', !entry);
         }
     }
 
@@ -3263,7 +3199,7 @@ function _renderPauseRecoveryBanner(data) {
     if (speakerEl) {
         var speakerId = data && data.media_player ? data.media_player : '';
         if (speakerId) {
-            speakerEl.textContent = speakerLabelFor(speakerId, adminState.mediaPlayers);
+            speakerEl.textContent = speakerLabelFor(speakerId, adminState.mediaPlayers, tr);
             speakerEl.classList.remove('hidden');
         } else {
             speakerEl.textContent = '';

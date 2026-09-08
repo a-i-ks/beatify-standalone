@@ -61,6 +61,12 @@
     // the clock is unchanged, so the running timer must be left ticking).
     var lastCountdownDeadline = null;
 
+    // #2554: `song_stopped` is an event, not part of the state payload, so the
+    // chip is pinned to the round it arrived in and clears itself once the next
+    // round renders.
+    var songStoppedRound = null;
+    var lastRenderedRound = null;
+
     // --- #1705: WS-broadcast render coalescing ------------------------------
     // Mirrors admin's createRenderCoalescer (#1584): the dashboard used to push
     // EVERY `state` broadcast straight into a full re-render (leaderboard
@@ -517,8 +523,14 @@
             // broadcast replaces it.
             stopCountdown();
             showView('dashboard-starting');
+        } else if (data.type === 'song_stopped') {
+            // #2554: the dashboard used to ignore this. To the room the music
+            // just stopped while the timer kept running, which is
+            // indistinguishable from the speaker dying.
+            songStoppedRound = lastRenderedRound;
+            setSongStoppedChip(true);
         }
-        // Dashboard ignores submit_ack, song_stopped, volume_changed since it doesn't interact
+        // Dashboard ignores submit_ack and volume_changed since it doesn't interact
     }
 
     /**
@@ -646,11 +658,50 @@
                 break;
             case 'PAUSED':
                 stopCountdown();
+                renderPausedView(data);
                 showView('dashboard-paused');
                 break;
             default:
                 debug('[Dashboard] Unknown phase:', phase);
         }
+    }
+
+    /**
+     * #2552: the paused screen names the actual reason.
+     *
+     * `pause_reason` has been in the state payload all along
+     * (game/serializers.py) and the dashboard ignored it, so a speaker failure
+     * told the room the host had disconnected — in front of a host standing
+     * next to the TV. The guests' phones meanwhile read "check your media
+     * player", which is not theirs to check.
+     */
+    function renderPausedView(state) {
+        var el = document.getElementById('dashboard-pause-message');
+        if (!el) return;
+        var reason = state && state.pause_reason;
+        var key = 'game.waitingForHost';
+        var fallback = 'Waiting for host to reconnect...';
+        if (reason === 'media_player_error') {
+            key = 'game.pausedSpeaker';
+            fallback = 'Speaker is not responding — the host is on it';
+        } else if (reason === 'no_songs_available') {
+            key = 'game.pausedNoSongs';
+            fallback = 'No more songs available';
+        }
+        el.setAttribute('data-i18n', key);
+        el.textContent = utils.t(key, fallback);
+    }
+
+    /**
+     * #2554: show or clear the "song stopped" chip in the PLAYING strip.
+     *
+     * `song_stopped` is an event, not part of the state payload, so the chip is
+     * pinned to the round it arrived in and clears itself when the next round
+     * renders.
+     */
+    function setSongStoppedChip(visible) {
+        var chip = document.getElementById('dashboard-song-stopped');
+        if (chip) chip.classList.toggle('hidden', !visible);
     }
 
     // ============================================
@@ -817,6 +868,13 @@
     function renderPlayingView(data) {
         var song = data.song || {};
         var players = data.players || [];
+
+        // #2554: a stop belongs to the round it happened in.
+        lastRenderedRound = data.round;
+        if (songStoppedRound !== data.round) {
+            songStoppedRound = null;
+            setSongStoppedChip(false);
+        }
 
         // Update round indicator
         var currentRound = document.getElementById('dashboard-current-round');
@@ -1069,6 +1127,46 @@
                 streakIndicator = '<span class="streak-indicator ' + hotClass + '">🔥' + entry.streak + '</span>';
             }
 
+            // #2578: Variante B aus dem Design-Entwurf — im Finale-Stechen
+            // bekommen die ZWEI Finalisten ein Abzeichen, alle anderen bleiben
+            // normal. Vorher trugen die Nicht-Fuehrenden `eliminated` und der
+            // Fernseher zeigte bei acht Spielern sechs Totenkoepfe, obwohl
+            // niemand rausgeflogen war.
+            //
+            // Der Bildschirm sagt jetzt, was wahr ist („zwei sind im Stechen"),
+            // statt etwas Falsches zu behaupten — und das sind zwei Abzeichen
+            // statt sechs Entwertungen.
+            var playoffLaeuft = leaderboard.some(function (x) { return x.playoff_spectator; });
+            var finalistBadge = (playoffLaeuft && !entry.playoff_spectator)
+                ? '<span class="finalist-badge">⚔️ ' + utils.escapeHtml(
+                    utils.t('reveal.finalePlayoff') || 'Finale') + '</span>'
+                : '';
+
+            // #2584: Sabotage sichtbar machen — Variante B aus dem Design-Entwurf
+            // vom 05.09.2026. Bis dahin sahen den Treffer nur Taeter und Opfer
+            // auf ihren Handys; der halbe Raum schaut aber auf den Fernseher,
+            // und genau dort passierte das lauteste soziale Element des Spiels
+            // unsichtbar.
+            //
+            // Das Abzeichen steht in der Zeile des GETROFFENEN, nicht als
+            // Einblendung ueber dem Jahr: es beantwortet die Frage, die im Raum
+            // gestellt wird („wen hat's erwischt?"), es bleibt den ganzen Reveal
+            // lesbar, und zwei Treffer in einer Runde stapeln sich nicht.
+            // Der Taeter wird genannt — Sabotage ist ein soziales Element, ohne
+            // Namen fehlt ihr die Pointe.
+            var sabotageBadge = '';
+            if (entry.sabotaged_by) {
+                var effektName = utils.t('sabotage.effect.' + (entry.sabotage_effect || ''), '');
+                var effektKurz = effektName && effektName.indexOf('sabotage.effect.') !== 0
+                    ? effektName
+                    : '';
+                sabotageBadge = '<span class="sabotage-badge" title="'
+                    + utils.escapeHtml(entry.sabotaged_by) + (effektKurz ? ' · ' + utils.escapeHtml(effektKurz) : '')
+                    + '">❄️ ' + utils.escapeHtml(entry.sabotaged_by)
+                    + (effektKurz ? ' <small>' + utils.escapeHtml(effektKurz) + '</small>' : '')
+                    + '</span>';
+            }
+
             // Bet badge next to name during playing phase
             var betBadge = '';
             if (showBet && betMap[entry.name]) {
@@ -1084,7 +1182,7 @@
 
             var html = '<div class="leaderboard-entry ' + rankClass + ' ' + animationClass + ' ' + disconnectedClass + ' ' + eliminatedClass + '">' +
                 '<span class="entry-rank">#' + entry.rank + '</span>' +
-                '<span class="entry-name">' + skullPrefix + utils.escapeHtml(entry.name) + awayBadge + betBadge + '</span>' +
+                '<span class="entry-name">' + skullPrefix + utils.escapeHtml(entry.name) + awayBadge + betBadge + finalistBadge + sabotageBadge + '</span>' +
                 '<span class="entry-meta">' +
                     streakIndicator +
                     changeIndicator +
@@ -1430,6 +1528,40 @@
     }
 
     /**
+     * Message types StatsService emits (services/stats.py) mapped onto the
+     * translated strings that already exist in every locale. The server sends
+     * the type plus the raw numbers; it does not know which language the TV is
+     * showing, so the wording is picked here, where the locale is known.
+     * @type {Object.<string, string>}
+     */
+    var MOTIVATIONAL_KEYS = {
+        'first': 'stats.firstGame',
+        'record': 'stats.newRecord',
+        'strong': 'stats.strongGame',
+        'above': 'stats.aboveAverage',
+        'close': 'stats.closeToAverage'
+    };
+
+    /**
+     * Translate a motivational message, falling back to the server's English
+     * text for an unknown type or a missing key. utils.t() returns the key on
+     * a miss and a key is truthy (#1402-B8), so the miss is checked explicitly.
+     * @param {Object} message - {type, message} from get_motivational_message
+     * @param {number} difference - pts/round vs the all-time average
+     * @returns {string} - Text for the chip
+     */
+    function motivationalText(message, difference) {
+        var key = MOTIVATIONAL_KEYS[message.type];
+        if (!key) return message.message || '';
+        // Every template that interpolates states the direction in words, so
+        // the number itself is always unsigned.
+        var diff = Math.abs(typeof difference === 'number' ? difference : 0).toFixed(1);
+        var translated = utils.t(key, { diff: diff });
+        if (!translated || translated === key) return message.message || '';
+        return translated;
+    }
+
+    /**
      * Render motivational message during reveal phase (Story 14.4)
      * @param {Object|null} performance - Game performance data from state
      */
@@ -1459,7 +1591,7 @@
             'close': '💪'
         };
         if (iconEl) iconEl.textContent = icons[message.type] || '';
-        if (textEl) textEl.textContent = message.message || '';
+        if (textEl) textEl.textContent = motivationalText(message, performance.difference);
     }
 
     /**
@@ -1765,21 +1897,34 @@
         var text = '';
         var cssClass = 'stats-comparison';
 
+        var avg = performance.current_avg.toFixed(1);
+
         if (performance.is_first_game) {
             icon = '🌟';
-            text = 'First game recorded! Avg: ' + performance.current_avg.toFixed(1) + ' pts/round';
+            text = utils.t('stats.firstGameRecorded', { avg: avg });
             cssClass += ' stats-comparison--first';
         } else if (performance.is_new_record) {
             icon = '🏆';
-            text = 'NEW RECORD! ' + performance.current_avg.toFixed(1) + ' pts/round (prev: ' + performance.all_time_avg.toFixed(1) + ')';
+            text = utils.t('stats.newRecordEnd', {
+                avg: avg,
+                prev: performance.all_time_avg.toFixed(1)
+            });
             cssClass += ' stats-comparison--record';
         } else if (performance.is_above_average) {
+            // The '+' sign lives in the template, so pass the bare number.
             icon = '📈';
-            text = performance.current_avg.toFixed(1) + ' pts/round (+' + performance.difference.toFixed(1) + ' vs all-time avg)';
+            text = utils.t('stats.aboveAverageEnd', {
+                avg: avg,
+                diff: performance.difference.toFixed(1)
+            });
             cssClass += ' stats-comparison--above';
         } else {
+            // difference is <= 0 here, so toFixed already carries the minus.
             icon = '📊';
-            text = performance.current_avg.toFixed(1) + ' pts/round (' + performance.difference.toFixed(1) + ' vs all-time avg)';
+            text = utils.t('stats.belowAverageEnd', {
+                avg: avg,
+                diff: performance.difference.toFixed(1)
+            });
             cssClass += ' stats-comparison--below';
         }
 

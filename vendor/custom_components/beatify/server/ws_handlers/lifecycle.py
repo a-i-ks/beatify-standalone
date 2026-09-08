@@ -91,7 +91,17 @@ async def handle_join(
     # add_player() will take its reconnection path.
     was_existing_player = game_state.get_player(name) is not None
 
-    success, error_code = game_state.add_player(name, ws)
+    # #998: claiming the host role requires a logged-in HA user. The check runs
+    # here, before add_player, because add_player needs the answer too: #2501
+    # closed the hole where a join *without* the flag could re-attach to the
+    # host's session by name and inherit is_admin without ever being asked for
+    # a login. Called once — it logs, and the rejection reasons are diagnostics
+    # for the #1120/#1131 Companion saga, not something to duplicate.
+    authed = _is_ha_authenticated(handler, data, ws) if is_admin else False
+
+    success, error_code = game_state.add_player(
+        name, ws, admin_claim_authenticated=authed
+    )
     _LOGGER.debug(
         "[WS-Debug] join add_player name=%r success=%s error_code=%s was_existing=%s",
         name,
@@ -104,10 +114,8 @@ async def handle_join(
         player = game_state.get_player(name)
 
         if is_admin:
-            # #998: claiming the host role requires a logged-in HA user.
             # Normal players join with no auth — only the admin claim is
             # gated. add_player() already ran, so undo it on rejection.
-            authed = _is_ha_authenticated(handler, data, ws)
             _LOGGER.debug(
                 "[WS-Debug] join is_admin=True _is_ha_authenticated=%s",
                 authed,
@@ -237,7 +245,7 @@ async def handle_join(
         if not state_msg:
             return
         try:
-            await _send_state_to(ws, state_msg, game_state)
+            await _send_state_to(handler, ws, state_msg)
         except (ConnectionError, RuntimeError) as err:
             _LOGGER.warning("Failed to send state to new player: %s", err)
             return
@@ -248,6 +256,7 @@ async def handle_join(
             ERR_NAME_INVALID: "Please enter a name",
             ERR_GAME_FULL: "Game is full",
             ERR_GAME_ENDED: "This game has ended",
+            ERR_UNAUTHORIZED: "Home Assistant login required to rejoin as host",
         }
         await ws.send_json(
             {
@@ -267,7 +276,7 @@ async def handle_get_state(
     """Handle dashboard/observer state request (Story 10.4)."""
     state_msg = build_state_message(game_state)
     if state_msg:
-        await _send_state_to(ws, state_msg, game_state)
+        await _send_state_to(handler, ws, state_msg)
 
 
 async def handle_round_timeout(
@@ -442,7 +451,7 @@ async def handle_reconnect(
 
     state_msg = build_state_message(game_state)
     if state_msg:
-        await _send_state_to(ws, state_msg, game_state)
+        await _send_state_to(handler, ws, state_msg)
 
     await handler.broadcast_state()
 
@@ -477,5 +486,16 @@ async def handle_leave(
     game_state.remove_player(player_name)
     await ws.send_json({"type": "left"})
     await ws.close()
+
+    # #2577: the deliberate exit has to trigger the same early reveal as a
+    # dropped connection. `_handle_disconnect` runs the #928 check, but it
+    # resolves the player through `get_player_by_ws` — and this handler has
+    # already removed them, so it returns before it gets there. The polite way
+    # out was the one case that left the room waiting on somebody who is gone.
+    try:
+        await game_state.trigger_early_reveal_if_complete()
+    except Exception:  # noqa: BLE001
+        _LOGGER.warning("Early-reveal check after leave failed")
+
     await handler.broadcast_state()
     _LOGGER.info("Player left game intentionally: %s", player_name)

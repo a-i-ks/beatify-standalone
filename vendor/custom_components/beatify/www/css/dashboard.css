@@ -219,6 +219,17 @@
     color: var(--color-accent-secondary);
 }
 
+/* #2556: the call to action above the QR code. Same weight as the player
+   count so it reads from across the room, but in the plain text colour — the
+   accent belongs to the count, which is the number people watch. */
+.dashboard-scan-hint {
+    margin: 0 0 var(--space-md);
+    font-size: var(--font-size-2xl);
+    font-weight: var(--font-weight-bold);
+    color: var(--color-text-white);
+    text-align: center;
+}
+
 .lobby-players-section {
     display: flex;
     flex-direction: column;
@@ -625,6 +636,46 @@
     animation: bet-pulse 2s ease-in-out infinite;
 }
 
+/* #2578: die zwei Finalisten im Stechen. Bewusst das einzige Abzeichen mit
+   Akzentfarbe in der Zeile — es markiert genau zwei Spieler und sagt, warum
+   die Runde anders heisst. */
+.finalist-badge {
+    display: inline-block;
+    background: var(--color-accent-secondary, #c8a24a);
+    color: var(--color-text-dark, #11131a);
+    font-size: var(--font-size-xs);
+    font-weight: var(--font-weight-bold);
+    padding: 1px 6px;
+    border-radius: var(--radius-sm);
+    margin-left: var(--space-xs);
+    white-space: nowrap;
+    vertical-align: middle;
+}
+
+/* #2584: Sabotage-Treffer in der Zeile des Getroffenen. Bewusst ruhiger als
+   .bet-badge — kein Verlauf, kein Puls: es steht den ganzen Reveal lang da und
+   soll die Zahl daneben nicht ueberstrahlen. Aus vier Metern zaehlt der Kontrast
+   des Symbols, nicht die Flaeche. */
+.sabotage-badge {
+    display: inline-block;
+    background: rgba(90, 169, 214, 0.18);
+    color: #9fd2ee;
+    border: 1px solid rgba(90, 169, 214, 0.45);
+    font-size: var(--font-size-xs);
+    font-weight: var(--font-weight-bold);
+    padding: 1px 6px;
+    border-radius: var(--radius-sm);
+    margin-left: var(--space-xs);
+    white-space: nowrap;
+    vertical-align: middle;
+}
+
+.sabotage-badge small {
+    font-weight: var(--font-weight-normal);
+    opacity: 0.75;
+    margin-left: 3px;
+}
+
 .bet-badge--won {
     background: linear-gradient(135deg, var(--color-success) 0%, var(--color-success-hover) 100%);
 }
@@ -802,6 +853,10 @@
     }
 
     .dashboard-player-count {
+        font-size: var(--font-size-3xl);
+    }
+
+    .dashboard-scan-hint {
         font-size: var(--font-size-3xl);
     }
 
@@ -1348,6 +1403,12 @@
     color: var(--color-accent-primary);
     font-size: 22px;
     filter: drop-shadow(0 0 8px var(--color-accent-primary));
+}
+/* #2554: song stopped by the host. Neutral on purpose — it explains silence,
+   it does not celebrate anything. */
+.chip-badge.chip-badge--stopped {
+    background: rgba(255, 255, 255, 0.08);
+    border: 1px solid rgba(255, 255, 255, 0.28);
 }
 .chip-badge.chip-badge--closest {
     background: rgba(0, 245, 255, 0.15);

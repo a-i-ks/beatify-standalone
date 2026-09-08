@@ -75,17 +75,18 @@ def test_breaking_the_sonos_seam_fails_the_check(tmp_path: Path) -> None:
     """The single most important assumption the port makes."""
     tree = tmp_path / "beatify"
     shutil.copytree(UPSTREAM, tree)
-    target = tree / "services" / "media_player.py"
+    target = tree / "services" / "playback" / "sonos.py"
     target.write_text(
         target.read_text(encoding="utf-8").replace(
-            'if self._platform == "sonos":', 'if self._platform == "sonos_v2":'
+            'platforms: ClassVar[tuple[str, ...]] = ("sonos",)',
+            'platforms: ClassVar[tuple[str, ...]] = ("sonos_v2",)',
         ),
         encoding="utf-8",
     )
 
     result = _run("--seams-only", str(tree))
     assert result.returncode == 1
-    assert "_play_song still dispatches platform 'sonos'" in result.stdout
+    assert "SonosStrategy still claims platform 'sonos'" in result.stdout
 
 
 def test_seams_pass_on_the_pinned_tree() -> None:

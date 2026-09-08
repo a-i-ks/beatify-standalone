@@ -10,7 +10,10 @@ GameState.get_state() becomes a thin wrapper calling
 
 from __future__ import annotations
 
+import contextlib
+import datetime
 import logging
+import re
 import time
 from typing import TYPE_CHECKING, Any
 
@@ -28,12 +31,90 @@ _LOGGER = logging.getLogger(__name__)
 _SLIDER_DEFAULT_MIN_YEAR = 1950
 
 
+def year_range(gs: GameState) -> dict[str, int]:
+    """Which years a player may offer: a fixed default, widened to cover the
+    playlist (#2337).
+
+    The upper default follows the clock rather than a literal, for the same
+    reason ``_max_year`` does in the playlist schema (#706): a hardcoded year
+    goes stale every January, quietly, and nobody notices until a song from the
+    new year comes up mid-party.
+
+    **This is deliberately module-level and public.** It answers one question —
+    which years are valid in this game — and that question is asked twice: once
+    to draw the slider, once to accept the guess. While the answers lived apart,
+    the slider reached down to the oldest song in the playlist and the handler
+    kept rejecting anything below ``YEAR_MIN``; a player could set the correct
+    year and have the guess thrown away (#2623).
+    """
+    from datetime import datetime, timezone
+
+    low, high = _SLIDER_DEFAULT_MIN_YEAR, datetime.now(timezone.utc).year
+    pm = getattr(gs, "_playlist_manager", None)
+    span = pm.get_year_span() if pm is not None else None
+    if span is not None:
+        low = min(low, span[0])
+        high = max(high, span[1])
+    return {"min": low, "max": high}
+
+
 class GameStateSerializer:
     """Builds broadcast-ready dicts from GameState.
 
     All methods are static — the serializer is stateless and receives
     the GameState instance as an explicit argument.
     """
+
+    # #2588: Jahreszahlen im Fun Fact, die der Antwort widersprechen.
+    _JAHR = re.compile(r"\b(19[3-9]\d|20[0-2]\d)\b")
+
+    @staticmethod
+    def _cover_original_year(song: dict[str, Any]) -> int | None:
+        """Das Jahr, das der Fun Fact nennt und das nicht die Antwort ist.
+
+        Gibt ``None`` zurueck, wenn der Eintrag kein Cover ist oder kein
+        abweichendes Jahr im Text steht — dann braucht es keinen Hinweis.
+
+        **Nur fuer Cover** (``alt_artists`` gesetzt): eine Jahreszahl im Fun Fact
+        eines Originals ist meist ein historischer Bezug und kein Widerspruch —
+        Jamalas „1944" handelt von einer Deportation. Ueber alle 66 Playlists
+        gemessen nennen 1110 von 8403 Eintraegen eine abweichende Jahreszahl,
+        aber nur 740 tragen ``alt_artists``; die Cover-Bedingung ist der
+        Unterschied zwischen einem Hinweis und einem Rauschen.
+
+        Durchsucht **alle** Sprachfassungen: welche der Spieler liest, weiss der
+        Server nicht, und eine Uebersetzung kann die Zahl tragen, wo das Original
+        sie umschreibt.
+
+        Von mehreren abweichenden Jahren gewinnt das **frueheste** — ein Cover
+        ist juenger als sein Original, also ist die kleinere Zahl die, die den
+        Widerspruch erzeugt.
+        """
+        if not song.get("alt_artists"):
+            return None
+        jahr = song.get("year")
+        if not isinstance(jahr, int):
+            return None
+        text = " ".join(
+            str(song.get(k) or "")
+            for k in (
+                "fun_fact",
+                "fun_fact_de",
+                "fun_fact_es",
+                "fun_fact_fr",
+                "fun_fact_nl",
+                "fun_fact_it",
+            )
+        )
+        if not text.strip():
+            return None
+        heute = datetime.date.today().year
+        gefunden = {
+            int(m)
+            for m in GameStateSerializer._JAHR.findall(text)
+            if int(m) != jahr and int(m) <= heute
+        }
+        return min(gefunden) if gefunden else None
 
     @staticmethod
     def serialize(gs: GameState) -> dict[str, Any] | None:
@@ -141,22 +222,8 @@ class GameStateSerializer:
 
     @staticmethod
     def _year_range(gs: GameState) -> dict[str, int]:
-        """Slider bounds: a fixed default, widened to cover the playlist (#2337).
-
-        The upper default follows the clock rather than a literal, for the
-        same reason ``_max_year`` does in the playlist schema (#706): a
-        hardcoded year goes stale every January, quietly, and nobody notices
-        until a song from the new year comes up mid-party.
-        """
-        from datetime import datetime, timezone
-
-        low, high = _SLIDER_DEFAULT_MIN_YEAR, datetime.now(timezone.utc).year
-        pm = getattr(gs, "_playlist_manager", None)
-        span = pm.get_year_span() if pm is not None else None
-        if span is not None:
-            low = min(low, span[0])
-            high = max(high, span[1])
-        return {"min": low, "max": high}
+        """Slider bounds for the state payload. See :func:`year_range`."""
+        return year_range(gs)
 
     @staticmethod
     def _add_playing_state(gs: GameState, state: dict[str, Any]) -> None:
@@ -180,6 +247,12 @@ class GameStateSerializer:
             state["seconds_remaining"] = max(0, round(gs.deadline / 1000 - gs._now()))
         state["last_round"] = gs.last_round
         state["songs_remaining"] = gs.songs_remaining
+        # #2557: the host's volume buttons had no idea what the speaker was set
+        # to — volume_changed only comes back in reply to their own tap, so the
+        # first press was blind and the at-the-limit guard checked an assumed
+        # 0.5. Not secret: every client gets it, only the host renders it.
+        with contextlib.suppress(Exception):
+            state["volume_level"] = gs.current_volume()
         # Issue #1725: Finale ×2 is live this round (last round + opt-in) — drives
         # the "Finale ×2" finish banner. Playoff flag lets the client badge a
         # tiebreaker round.
@@ -212,6 +285,9 @@ class GameStateSerializer:
                 "fun_fact_fr": gs.current_song.get("fun_fact_fr", ""),
                 "fun_fact_nl": gs.current_song.get("fun_fact_nl", ""),
                 "fun_fact_it": gs.current_song.get("fun_fact_it", ""),
+                "cover_original_year": GameStateSerializer._cover_original_year(
+                    gs.current_song
+                ),
             }
         # Leaderboard (Story 5.5)
         state["leaderboard"] = gs.get_leaderboard()
@@ -241,6 +317,17 @@ class GameStateSerializer:
         state["finale_playoff_active"] = gs._finale_playoff_active
         # Filtered song info during REVEAL — exclude URIs, alt_artists, internal fields
         if gs.current_song:
+            # #2588: der Fun Fact eines Covers nennt oft das Jahr des Originals —
+            # direkt neben der Antwort, mit dem Melde-Knopf daneben. So entstand
+            # #2587: „Randy Newman schrieb den Song 1972" stand neben der
+            # richtigen Antwort 1986, und der Spieler meldete einen Fehler, der
+            # keiner war.
+            #
+            # Variante D aus dem Design-Entwurf: der Hinweis erscheint **nur bei
+            # echtem Widerspruch**, nicht bei jedem der 740 Cover-Eintraege — und
+            # er nennt die Zahl, um die es geht, statt um sie herumzureden. Die
+            # Erkennung laeuft hier und nicht im Client, weil `alt_artists`
+            # bewusst nicht im Reveal-Payload steht (eine Zeile tiefer).
             state["song"] = {
                 # Crate Digger: a boolean, deliberately NOT the URI. The host
                 # can then offer "fix this song" at reveal (the pool is theirs
@@ -409,6 +496,11 @@ class GameStateSerializer:
                 # Issue #827: Sudden Death state
                 "eliminated": p.eliminated,
                 "eliminated_round": p.eliminated_round,
+                # #2578: „sitzt dieses Stechen aus" ist etwas anderes als
+                # „ist ausgeschieden". Ohne das eigene Feld zeigte der
+                # Fernseher bei acht Spielern und zwei im Stechen sechs
+                # Totenkoepfe.
+                "playoff_spectator": p.playoff_spectator,
                 # Issue #2324: the player's collected row — every song they
                 # placed inside close_range, oldest first. Sent at REVEAL
                 # because that is where it just grew ("you kept it"), and it

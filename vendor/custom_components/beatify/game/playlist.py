@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import os
 import random
 import re
 from collections.abc import Callable
@@ -170,8 +171,18 @@ class PlaylistManager:
         #   a plain ``[:n]`` would serve only the first playlist of a
         #   multi-playlist selection. Sampling keeps the mix.
         self._max_rounds = max(max_rounds, MIN_ROUNDS) if max_rounds else 0
+        # #2547: the songs the cap drops are kept aside rather than discarded.
+        # A capped game ends with get_remaining_count() == 0 by construction, so
+        # the finale tiebreaker (#1725) — which only arms while unplayed songs
+        # remain — could never fire in the actual last round, the one case it
+        # was written for. reserve_songs_for_playoff() hands them back one at a
+        # time, so the cap still governs normal play.
+        self._reserve_songs: list[dict[str, Any]] = []
         if self._max_rounds and len(self._songs) > self._max_rounds:
-            self._songs = random.sample(self._songs, self._max_rounds)
+            sampled = random.sample(self._songs, self._max_rounds)
+            sampled_ids = {id(song) for song in sampled}
+            self._reserve_songs = [s for s in self._songs if id(s) not in sampled_ids]
+            self._songs = sampled
             # #2418: regroup the buckets from the sampled pool. Until this line
             # existed the cap applied to `self._songs` alone, while
             # `self._buckets` — assigned above, before the sample — kept every
@@ -362,6 +373,34 @@ class PlaylistManager:
         # subtraction can go negative. Clamp at 0.
         return max(0, len(self._songs) - len(self._played_uris))
 
+    def reserve_songs_for_playoff(self, count: int = 1) -> int:
+        """Move up to ``count`` capped-out songs back into the playable pool.
+
+        Returns the number of songs actually released (0 when the round cap was
+        never applied, or the reserve is spent).
+
+        The finale tiebreaker (#1725) arms only while unplayed songs remain.
+        With a round cap the pool is sampled down to exactly ``max_rounds``, so
+        after the last round nothing remains and the tiebreaker was unreachable
+        in the situation it exists for — a tie at the end of a normal game
+        (#2547). Rather than lifting the cap and letting normal play run long,
+        the dropped songs stay in reserve and a playoff draws from them.
+        """
+        if count <= 0 or not self._reserve_songs:
+            return 0
+        released = self._reserve_songs[:count]
+        self._reserve_songs = self._reserve_songs[count:]
+        self._songs.extend(released)
+        for song in released:
+            source = song.get("_playlist_source", "__default__")
+            self._buckets.setdefault(source, []).append(song)
+        self._multi_playlist = len(self._buckets) > 1
+        _LOGGER.info(
+            "Finale tiebreaker: released %d reserved song(s) for a playoff round",
+            len(released),
+        )
+        return len(released)
+
     def has_playable_songs(self) -> bool:
         """True if this manager has any songs for its provider (#709)."""
         return len(self._songs) > 0
@@ -539,6 +578,97 @@ def _prune_relocated_playlists(
     return removed
 
 
+def _copy_bundled_playlists_sync(
+    bundled_dir: Path, dest_dir: Path
+) -> tuple[list[tuple[str, str]], list[Path]]:
+    """Copy/refresh every bundled playlist into ``dest_dir``, in ONE executor job.
+
+    #2572: this used to be a loop on the event loop that awaited a separate
+    executor round-trip per playlist, and each round-trip parsed both JSON
+    documents in full just to read the ``version`` field. With 66 bundled
+    playlists at 13.7 MB that is 66 hops and ~110 ms of parsing on every setup,
+    growing with the catalogue. ``_discover_playlists_sync`` further down
+    already had the right shape: one job for the whole walk, plus a stat-based
+    signature that skips the parse when nothing changed. This does the same.
+
+    The stat shortcut is deliberately conservative. A destination counts as
+    current only when it has **exactly** the byte size of the bundled file and
+    was written no earlier than it — which is what :func:`_copy_playlist_file`
+    leaves behind, and what an untouched install looks like at every restart
+    after the first. Anything else (a release that re-installed the bundle, a
+    file the user edited, a truncated copy) fails the check and falls through
+    to the version comparison, so no update can be missed by it.
+
+    Returns ``(log_records, playlist_files)``. Log records are finished
+    ``(level, message)`` pairs the caller emits on the event loop: only the
+    handful of playlists that actually changed produce one, so nothing is
+    formatted for the up-to-date case.
+    """
+    log: list[tuple[str, str]] = []
+    playlist_files = list(bundled_dir.glob("**/*.json"))
+
+    for playlist_file in playlist_files:
+        # Preserve relative path (e.g. community/greatest-metal-songs.json)
+        rel = playlist_file.relative_to(bundled_dir)
+        dest_file = dest_dir / rel
+        try:
+            src_stat = playlist_file.stat()
+            try:
+                dst_stat: os.stat_result | None = dest_file.stat()
+            except FileNotFoundError:
+                dst_stat = None
+
+            if dst_stat is None:
+                # New playlist — copy it. The bundled document is parsed only
+                # here, on the path that writes something anyway.
+                _copy_playlist_file(playlist_file, dest_file)
+                bundled_ver = _get_playlist_version(dest_file)
+                log.append(
+                    (
+                        "info",
+                        f"Copied bundled playlist {playlist_file.name} (v{bundled_ver})",
+                    )
+                )
+                continue
+
+            if (
+                dst_stat.st_size == src_stat.st_size
+                and dst_stat.st_mtime_ns >= src_stat.st_mtime_ns
+            ):
+                # Byte-identical copy written after the bundled file: the common
+                # case at every restart, and it costs two stats instead of two
+                # full JSON parses.
+                continue
+
+            bundled_ver = _get_playlist_version(playlist_file)
+            existing_ver = _get_playlist_version(dest_file)
+            if _compare_versions(bundled_ver, existing_ver) > 0:
+                _copy_playlist_file(playlist_file, dest_file)
+                log.append(
+                    (
+                        "info",
+                        f"Updated playlist {playlist_file.name}: "
+                        f"v{existing_ver} -> v{bundled_ver}",
+                    )
+                )
+        except OSError as err:
+            log.append(
+                ("warning", f"Failed to process playlist {playlist_file.name}: {err}")
+            )
+
+    return log, playlist_files
+
+
+def _copy_playlist_file(src: Path, dst: Path) -> None:
+    """Copy file contents, creating parent dirs (runs in executor).
+
+    #1402 B3: folds the previously-on-event-loop ``mkdir`` in here.
+    """
+    dst.parent.mkdir(parents=True, exist_ok=True)
+    content = src.read_text(encoding="utf-8")
+    dst.write_text(content, encoding="utf-8")
+
+
 async def _copy_bundled_playlists(dest_dir: Path) -> None:
     """Copy bundled playlists to destination, updating if bundled version is newer."""
     # Bundled playlists are in custom_components/beatify/playlists/
@@ -546,68 +676,17 @@ async def _copy_bundled_playlists(dest_dir: Path) -> None:
 
     loop = asyncio.get_running_loop()
 
-    # #1402 B3: `exists()` is a blocking syscall — run it (and the glob) in the
+    # #1402 B3: `exists()` is a blocking syscall — run it (and the walk) in the
     # executor instead of on the event loop.
     if not await loop.run_in_executor(None, bundled_dir.exists):
         return
 
-    def _copy_file(src: Path, dst: Path) -> None:
-        """Copy file contents, creating parent dirs (runs in executor).
-
-        #1402 B3: folds the previously-on-event-loop ``mkdir`` in here.
-        """
-        dst.parent.mkdir(parents=True, exist_ok=True)
-        content = src.read_text(encoding="utf-8")
-        dst.write_text(content, encoding="utf-8")
-
-    def _get_versions(src: Path, dst: Path) -> tuple[str, str, bool]:
-        """Get versions from both files + whether dst exists (runs in executor).
-
-        #1402 B3: returns ``dst_exists`` so the caller reuses this single stat
-        instead of re-running a blocking ``dst.exists()`` on the event loop.
-        """
-        bundled_ver = _get_playlist_version(src)
-        dst_exists = dst.exists()
-        existing_ver = _get_playlist_version(dst) if dst_exists else "0.0"
-        return bundled_ver, existing_ver, dst_exists
-
-    # Offload blocking glob to executor to avoid scandir in event loop (#516)
-    playlist_files = await loop.run_in_executor(
-        None, lambda: list(bundled_dir.glob("**/*.json"))
+    # #2572: walk + stat + copy in a single hop instead of one per playlist.
+    log, playlist_files = await loop.run_in_executor(
+        None, _copy_bundled_playlists_sync, bundled_dir, dest_dir
     )
-    for playlist_file in playlist_files:
-        # Preserve relative path (e.g. community/greatest-metal-songs.json)
-        rel = playlist_file.relative_to(bundled_dir)
-        dest_file = dest_dir / rel
-        try:
-            # Get versions (+ existence, reused below — _copy_file makes the dir)
-            bundled_ver, existing_ver, dest_exists = await loop.run_in_executor(
-                None, _get_versions, playlist_file, dest_file
-            )
-
-            if not dest_exists:
-                # New playlist - copy it
-                await loop.run_in_executor(None, _copy_file, playlist_file, dest_file)
-                _LOGGER.info(
-                    "Copied bundled playlist %s (v%s)", playlist_file.name, bundled_ver
-                )
-            elif _compare_versions(bundled_ver, existing_ver) > 0:
-                # Bundled version is newer - update
-                await loop.run_in_executor(None, _copy_file, playlist_file, dest_file)
-                _LOGGER.info(
-                    "Updated playlist %s: v%s -> v%s",
-                    playlist_file.name,
-                    existing_ver,
-                    bundled_ver,
-                )
-            else:
-                _LOGGER.debug(
-                    "Playlist %s is up to date (v%s)", playlist_file.name, existing_ver
-                )
-        except OSError as err:
-            _LOGGER.warning(
-                "Failed to process playlist %s: %s", playlist_file.name, err
-            )
+    for level, message in log:
+        getattr(_LOGGER, level)(message)
 
     # #1864: every current playlist is on disk now, so anything left at a former
     # path is a stranded duplicate. Runs after the copy loop precisely so the
@@ -951,6 +1030,46 @@ def filter_songs_for_provider(
 # hass.data[DOMAIN] key holding the memoised discovery result (#1704).
 _DISCOVERY_CACHE_KEY = "_playlist_discovery_cache"
 
+# --- Transient smart-mix files (#1538 / #1547, excluded here since #2639) ----
+# The Smart Playlist Mixer writes one throwaway document per game start to
+# ``<playlist dir>/mix/__mix__-<uuid>.json`` and unlinks stale ones an hour
+# later. It is an implementation detail of a single start-game call, never
+# catalogue content — which is why the mixer itself already refuses to re-mix
+# one.
+#
+# #2639: it must therefore stay out of discovery altogether. Fingerprinting it
+# meant every mix write AND every cleanup unlink changed the signature, so the
+# start-game call that follows milliseconds later — the one that exists to reuse
+# the cached parse (#1766) — plus the 3 s lobby poll re-read, re-parsed and
+# re-validated the entire catalogue (66 files / 13 MB / 8.4k songs) while the
+# host was already looking at a spinner. Skipping these files keeps the
+# signature made of catalogue content only: a real add / edit / delete still
+# changes it and still invalidates, a mix no longer does. Skipping them from the
+# walk (rather than from the fingerprint alone) also keeps the transient
+# document out of the hub playlist list, where it used to appear as a
+# ``source: "bundled"`` playlist until cleanup.
+#
+# These constants live here, not in ``server/mix_views.py``, because that module
+# imports from this one — the reverse direction would be an import cycle.
+TRANSIENT_MIX_PREFIX = "__mix__"
+TRANSIENT_MIX_SUBDIR = "mix"
+
+
+def is_transient_mix(path: str | Path) -> bool:
+    """True if ``path`` points at a transient smart-mix file.
+
+    Matches on the ``mix/`` parent dir OR a ``__mix__``-prefixed filename so
+    EVERY uniquely-named transient mix (``__mix__-<uuid>.json``) is recognised,
+    not just the legacy fixed ``__mix__.json`` (#1547).
+    """
+    if not path:
+        return False
+    p = Path(path)
+    return p.parent.name == TRANSIENT_MIX_SUBDIR or p.name.startswith(
+        TRANSIENT_MIX_PREFIX
+    )
+
+
 # Signature entry per playlist file: (absolute path, mtime_ns, size). The whole
 # tuple of these — sorted, over every *.json under the playlist dir — is the
 # cache key. It changes on add / delete (path set changes) AND on in-place edit
@@ -983,7 +1102,11 @@ def _discover_playlists_sync(
         return [], {}, empty_sig
 
     # Offload blocking glob to executor to avoid scandir in event loop (#516).
-    json_files = sorted(playlist_dir.glob("**/*.json"))
+    # Transient smart-mix files are skipped here so neither the signature nor
+    # the parsed result ever sees them (#2639, see ``is_transient_mix``).
+    json_files = sorted(
+        f for f in playlist_dir.glob("**/*.json") if not is_transient_mix(f)
+    )
 
     sig_parts: list[tuple[str, int, int]] = []
     for f in json_files:
@@ -1170,43 +1293,7 @@ async def async_discover_playlists(hass: HomeAssistant) -> list[dict]:
     return metas
 
 
-async def async_load_and_validate_playlist(
-    path: str | Path,
-) -> tuple[dict | None, list[str]]:
-    """Load and validate a playlist file."""
-    path = Path(path)
-
-    loop = asyncio.get_running_loop()
-
-    # #1402 B3: `exists()` is a blocking syscall — run it in the executor.
-    if not await loop.run_in_executor(None, path.exists):
-        return (None, [f"File not found: {path}"])
-
-    def _read_file(p: Path) -> str:
-        """Read file contents (runs in executor)."""
-        return p.read_text(encoding="utf-8")
-
-    try:
-        content = await loop.run_in_executor(None, _read_file, path)
-        data = json.loads(content)
-    except json.JSONDecodeError as e:
-        return (None, [f"Invalid JSON: {e}"])
-
-    rejected_songs: list[dict[str, Any]] = []
-    is_valid, errors = validate_playlist(data, rejected_songs=rejected_songs)
-
-    if is_valid:
-        return (data, [])
-
-    # #1576: a host loading a flawed playlist used to get zero feedback on
-    # which tracks dropped (per-song problems were DEBUG-only). Log a concise
-    # INFO summary naming the offending songs + reasons so it is visible in
-    # the HA log without flipping the integration to DEBUG.
-    if rejected_songs:
-        _LOGGER.info(
-            "Playlist %s: %d song(s) failed validation: %s",
-            path.name,
-            len(rejected_songs),
-            summarize_rejected_songs(rejected_songs),
-        )
-    return (None, errors)
+# #2583: `async_load_and_validate_playlist` ended this file. It read,
+# parsed and validated a playlist in one call, but all three production
+# paths call `validate_playlist()` on an already-parsed document instead,
+# and no caller for it exists anywhere in the history available here.

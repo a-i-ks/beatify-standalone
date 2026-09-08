@@ -11,11 +11,20 @@ a reference to) the following subsystems:
 * ``RoundManager`` — round number, timer/deadline, intro mode, metadata
 * ``HighlightsTracker`` — game highlights reel (exact matches, streaks, …)
 
-It **references** (does not own, receives via setter):
+It **references** (does not own, receives from outside):
 
 * ``StatsService`` — historical game statistics and song difficulty
-* ``MediaPlayerService`` — lazy-created on first round via Home Assistant
-* ``PartyLightsService`` — optional party-lights integration
+* media player — built on first round from the injected factory (#2638)
+* party lights — optional, built from the injected factory (#2638)
+* TTS announcer — optional, built from the injected factory (#2638)
+
+#2638: GameState does not import ``services.*`` and does not know Home
+Assistant exists when it builds these. It is handed a
+``GameOutputFactories`` bundle (game/protocols.py) at construction; the
+composition root fills it with HA-backed factories, a test fills it with fakes
+or leaves it empty. The admin spectator WebSocket used to live here too — it is
+an aiohttp socket the server opens and closes, so it now lives on
+``BeatifyWebSocketHandler``.
 
 Serialization is handled by ``GameStateSerializer`` (game/serializers.py)
 which builds broadcast-ready dicts from GameState without GameState
@@ -50,7 +59,11 @@ from .round_manager import RoundManager
 from .scoring import (
     ScoringService,
 )
-from .protocols import MediaPlayerProtocol, PartyLightsProtocol
+from .protocols import (
+    GameOutputFactories,
+    MediaPlayerProtocol,
+    PartyLightsProtocol,
+)
 from .state_auto_advance import RevealAutoAdvanceMixin
 from .state_challenge import ChallengeMixin
 from .state_leaderboard import LeaderboardMixin
@@ -71,7 +84,6 @@ from .types import RoundAnalytics, _get_decade_label
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable
 
-    from aiohttp import web
     from homeassistant.core import HomeAssistant
 
     from custom_components.beatify.services.stats import StatsService
@@ -268,15 +280,25 @@ class GameState(
     :class:`~custom_components.beatify.game.state_round_delegation.RoundManagerDelegationMixin`.
     """
 
-    def __init__(self, time_fn: Callable[[], float] | None = None) -> None:
+    def __init__(
+        self,
+        time_fn: Callable[[], float] | None = None,
+        *,
+        service_factories: GameOutputFactories | None = None,
+    ) -> None:
         """
         Initialize game state.
 
         Args:
             time_fn: Optional time function for testing. Defaults to time.time.
+            service_factories: How to build the media player / party lights /
+                TTS services (#2638). Omitted = none of them are wired, which is
+                how the game logic is constructed without Home Assistant.
 
         """
         self._now = time_fn or time.time
+        # #2638: the only route from the domain to a concrete output service.
+        self._service_factories = service_factories or GameOutputFactories()
         self._hass: HomeAssistant | None = None
         self.game_id: str | None = None
         self.admin_token: str | None = None  # Issue #386: REST admin auth
@@ -400,9 +422,6 @@ class GameState(
         # an opponent who is still guessing. Opt-in; default off = no tokens.
         self.sabotage_enabled: bool = False
 
-        # Issue #477: Admin spectator WebSocket (host without being a player)
-        self._admin_ws: web.WebSocketResponse | None = None
-
         # Issue #42: Metadata update callback
         self._on_metadata_update: Callable[[dict[str, Any]], Awaitable[None]] | None = (
             None
@@ -416,6 +435,11 @@ class GameState(
 
         # Issue #441: Observer callbacks for HA entity updates
         self._state_callbacks: list[Callable[[], None]] = []
+
+        # #2638: observers notified when a game is torn down or rebuilt
+        # (``_reset_game_internals``). The server uses this to drop its admin
+        # spectator socket at exactly the moment GameState used to null it.
+        self._reset_callbacks: list[Callable[[], None]] = []
 
     def _apply_config(self, config: GameStateConfig) -> None:
         """Apply a GameStateConfig to self, setting all config-managed fields."""
@@ -440,6 +464,19 @@ class GameState(
     def _notify_state_callbacks(self) -> None:
         """Notify all registered state observers (Issue #441)."""
         for cb in self._state_callbacks:
+            cb()
+
+    def register_reset_callback(self, cb: Callable[[], None]) -> None:
+        """Register a callback invoked on every game teardown/rebuild (#2638).
+
+        Fired from ``_reset_game_internals`` — i.e. by ``end_game()`` and
+        ``rematch_game()``, at the one point both share.
+        """
+        self._reset_callbacks.append(cb)
+
+    def _notify_reset_callbacks(self) -> None:
+        """Notify all registered reset observers (#2638)."""
+        for cb in self._reset_callbacks:
             cb()
 
     def async_shutdown(self) -> None:
@@ -653,12 +690,13 @@ class GameState(
             self._challenge_manager if self.title_artist_mode else None
         )
         for player in self.players.values():
-            # #1748: an eliminated player (Sudden Death) is out of the game — do
-            # not accumulate any further score for them. Their frozen totals must
-            # stand, so skip the per-player scoring pass entirely. (The intro
-            # speed-rank pool in _score_intro_round independently excludes
-            # eliminated players so survivors' ranks are unaffected.)
-            if player.eliminated:
+            # #1748 / #2612: an eliminated player or a finale-playoff spectator
+            # is out of the round — do not accumulate any further score for
+            # them. Their frozen totals must stand, so skip the per-player
+            # scoring pass entirely. (The intro speed-rank pool in
+            # _score_intro_round independently excludes out-of-play players so
+            # survivors' ranks are unaffected.)
+            if player.out_of_play:
                 continue
             try:
                 ScoringService.score_player_round(
@@ -880,8 +918,15 @@ class GameState(
     # ------------------------------------------------------------------
 
     def non_eliminated_players(self) -> list[PlayerSession]:
-        """Players still in the game (not yet eliminated). Issue #827."""
-        return [p for p in self.players.values() if not p.eliminated]
+        """Spieler, die gerade mitspielen. Issue #827.
+
+        #2578: prueft ``out_of_play`` statt ``eliminated``, damit ein Zuschauer
+        im Finale-Stechen genauso ausgenommen ist — er soll weder als
+        Sudden-Death-Kandidat gelten noch einen Comeback-Token bekommen. Der
+        Unterschied zwischen beiden Zustaenden zaehlt fuer die **Anzeige**, nicht
+        fuer die Frage, wer diese Runde mitspielt.
+        """
+        return [p for p in self.players.values() if not p.out_of_play]
 
     def _title_artist_scoring_deferred(self) -> bool:
         """Whether this round's scoring is deferred past the vote window (#1180).
@@ -1099,6 +1144,24 @@ class GameState(
     # Finale sudden-death tiebreaker (Issue #1725)
     # ------------------------------------------------------------------
 
+    def _release_playoff_song(self) -> bool:
+        """Free one capped-out song so a playoff can be played (#2547).
+
+        With a round cap the playable pool is sampled down to exactly
+        ``max_rounds`` (#1475), so a game that runs to its last round ends with
+        ``songs_remaining == 0`` by construction. The tiebreaker guard below
+        then declined every tie at the end of a normal game — the one situation
+        it was written for. The songs the cap dropped are kept in reserve and
+        released one per playoff round, so the cap still governs normal play.
+
+        Returns ``True`` when a song was released and the playoff may proceed.
+        """
+        manager = getattr(self, "_playlist_manager", None)
+        release = getattr(manager, "reserve_songs_for_playoff", None)
+        if not callable(release):
+            return False
+        return release(1) > 0
+
     async def maybe_start_finale_playoff(self) -> bool:
         """Arm + start a finale tiebreaker playoff round, if one is warranted.
 
@@ -1143,21 +1206,31 @@ class GameState(
                 FINALE_PLAYOFF_MAX_ROUNDS,
             )
             return False
-        if self.songs_remaining < 1:
+        if self.songs_remaining < 1 and not self._release_playoff_song():
             return False
         winners, _top = self.compute_winners()
         if len(winners) <= 1:
             return False
 
         # Arm the playoff: freeze everyone who is NOT tied for first out of the
-        # game (reusing the Sudden-Death `eliminated` flag so scoring skips them
-        # and the leaderboard renders them below the cut-line). Leave
-        # `eliminated_round` unset so they are not mislabelled as a Sudden-Death
-        # "eliminated this round" cut.
+        # round, so scoring skips them.
+        #
+        # #2578: das lief bis hierher ueber dasselbe `eliminated`, das Sudden
+        # Death benutzt — bequem fuer den Scoring-Skip, falsch fuer alles andere.
+        # Bei acht Spielern und zwei im Stechen zeigte der Fernseher **sechs
+        # Totenkoepfe**, obwohl niemand ausgeschieden war; das Leaderboard
+        # sortierte sie unter die Schnittlinie, und `_superlative_last_one_standing`
+        # zaehlte sie als Ausgeschiedene, sodass der Sieger „Last One Standing"
+        # mit der falschen Zahl bekam.
+        #
+        # `playoff_spectator` traegt jetzt die Bedeutung „zaehlt diese Runde
+        # nicht", `eliminated` bleibt „ist raus". Wer schon vor dem Stechen
+        # ausgeschieden war, behaelt `eliminated` — beide Zustaende koennen
+        # gleichzeitig gelten.
         winner_names = {w.name for w in winners}
         for player in self.players.values():
-            if player.name not in winner_names and not player.eliminated:
-                player.eliminated = True
+            if player.name not in winner_names:
+                player.playoff_spectator = True
         self._finale_playoff_rounds += 1
         self._finale_playoff_active = True
         _LOGGER.info(

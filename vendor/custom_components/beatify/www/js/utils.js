@@ -181,9 +181,16 @@ window.BeatifyUtils = (function() {
         if (text === null || text === undefined) {
             return '';
         }
-        var div = document.createElement('div');
-        div.textContent = String(text);
-        return div.innerHTML;
+        // Escapes the five characters directly rather than routing through a
+        // detached div: the div trick leaves the quotes alone, which breaks
+        // attribute context. Kept byte-identical to the player-utils.js copy
+        // so the two cannot drift. (#2505)
+        return String(text)
+            .replace(/&/g, '&amp;')   // must come first
+            .replace(/</g, '&lt;')
+            .replace(/>/g, '&gt;')
+            .replace(/"/g, '&quot;')
+            .replace(/'/g, '&#39;');
     }
 
     // ==========================================================================
@@ -521,7 +528,13 @@ window.BeatifyUtils = (function() {
                 is_admin: p.is_admin,
                 connected: p.connected,
                 eliminated: p.eliminated,
-                eliminated_round: p.eliminated_round
+                eliminated_round: p.eliminated_round,
+                // #2584: who hit this player this round and with what. Already
+                // in the players array (#1665) — the TV just never read it.
+                sabotaged_by: p.sabotaged_by,
+                sabotage_effect: p.sabotage_effect,
+                // #2578: sitzt dieses Stechen aus — nicht dasselbe wie eliminated.
+                playoff_spectator: p.playoff_spectator
             }, entry);
         });
     }

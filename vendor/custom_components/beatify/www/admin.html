@@ -49,12 +49,21 @@
     <meta name="apple-mobile-web-app-capable" content="yes">
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
     <meta name="apple-mobile-web-app-title" content="Beatify">
+    <link rel="icon" href="/beatify/static/img/icon-256.png">
     <link rel="apple-touch-icon" href="/beatify/static/img/icon-256.png">
     <meta name="mobile-web-app-capable" content="yes">
     <!-- Preconnect for faster font loading (Story 9.8) -->
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@700;900&display=swap" rel="stylesheet">
+    <!-- #2641: the font stylesheet is fetched non-blocking. A cross-origin
+         <link rel=stylesheet> in the head stops rendering until the CDN answers
+         or times out, and on party wifi with no working internet that is 5-30
+         seconds of blank screen before anything appears. media="print" makes
+         the browser fetch it at low priority without blocking the render; the
+         onload swap applies it the moment it arrives. The page is fully
+         readable in the fallback stack until then. -->
+    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@700;900&display=swap" rel="stylesheet" media="print" onload="this.media='all'">
+    <noscript><link href="https://fonts.googleapis.com/css2?family=Outfit:wght@700;900&display=swap" rel="stylesheet"></noscript>
     <!-- Story 18.4: Use minified CSS in production -->
     <link rel="stylesheet" href="/beatify/static/css/styles.min.css?v={{ASSET_VER}}">
     <link rel="stylesheet" href="/beatify/static/css/library.min.css?v={{ASSET_VER}}">
@@ -456,12 +465,11 @@
                             <span class="setting-icon" aria-hidden="true">⏭️</span>
                             <span data-i18n="admin.revealAdvance">Auto-advance</span>
                         </span>
-                        <div class="chip-group" role="group" aria-label="Reveal auto-advance">
-                            <button type="button" class="chip chip--active" aria-pressed="true" data-reveal-advance="0" data-i18n="admin.revealAdvanceOff">Off</button>
-                            <button type="button" class="chip" aria-pressed="false" data-reveal-advance="30">30s</button>
-                            <button type="button" class="chip" aria-pressed="false" data-reveal-advance="60">60s</button>
-                            <button type="button" class="chip" aria-pressed="false" data-reveal-advance="90">90s</button>
-                        </div>
+                        <!-- #2626: filled by renderAutoAdvanceChips() from
+                             REVEAL_AUTO_ADVANCE_OPTIONS (the mirror of const.py).
+                             Kept empty here so the markup cannot offer a delay
+                             the server would silently turn into "Off". -->
+                        <div class="chip-group" id="reveal-advance-chips" role="group" aria-label="Reveal auto-advance"></div>
                     </div>
                     <p class="setting-hint" data-i18n="admin.revealAdvanceHint">After the reveal, automatically start the next round — so the game runs without anyone at the admin screen. "Off" means you advance each round manually.</p>
                 </div>
@@ -479,7 +487,11 @@
                             <button type="button" class="chip" aria-pressed="false" data-difficulty="hard" data-i18n="admin.hard">Hard</button>
                         </div>
                     </div>
-                    <p class="setting-hint" id="admin-difficulty-hint" data-i18n="admin.difficultyHint">Easy: wide tolerance (±7 years). Normal: medium (±3 years). Hard: only close guesses score.</p>
+                    <!-- #2625: written by renderDifficultyHint(), which composes the
+                         sentence from DIFFICULTY_SCORING. The string that stood
+                         here promised "Hard: only close guesses score" while the
+                         code paid 3 points within ±2 years. -->
+                    <p class="setting-hint" id="admin-difficulty-hint"></p>
                     <p class="setting-hint hidden" id="admin-difficulty-ta-summary" data-i18n="wizard.step4.taScoring">Title 10 · Artist 5 · Partial 5/3</p>
                 </div>
 
@@ -1137,6 +1149,21 @@
                         </span>
                     </div>
                     <div class="stat-badge-bar">
+                        <!-- #2621: invite a late guest without leaving the game.
+                             The only join-QR trigger used to sit in #home-view,
+                             which is hidden the moment the game leaves LOBBY.
+                             This re-opens the very same #qr-modal. Shown by
+                             showAdminPlayingView() once a join URL is known. -->
+                        <button id="admin-invite-playing" type="button" class="btn btn-ghost hidden"
+                                data-i18n-title="lobby.invitePlayers" title="Invite Players">
+                            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                                <path d="M16 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/>
+                                <circle cx="8.5" cy="7" r="4"/>
+                                <line x1="20" y1="8" x2="20" y2="14"/>
+                                <line x1="23" y1="11" x2="17" y2="11"/>
+                            </svg>
+                            <span class="sr-only" data-i18n="lobby.invitePlayers">Invite Players</span>
+                        </button>
                         <span id="admin-game-difficulty-badge" class="stat-badge stat-badge--difficulty"></span>
                     </div>
                 </div>
@@ -1286,6 +1313,20 @@
                         </span>
                     </div>
                     <div class="stat-badge-bar">
+                        <!-- #2621: same invite target on the reveal screen — the
+                             music has stopped and the room is talking, which is
+                             when a newcomer actually walks up. Leaving it out
+                             here would blink the button off every round. -->
+                        <button id="admin-invite-reveal" type="button" class="btn btn-ghost hidden"
+                                data-i18n-title="lobby.invitePlayers" title="Invite Players">
+                            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                                <path d="M16 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/>
+                                <circle cx="8.5" cy="7" r="4"/>
+                                <line x1="20" y1="8" x2="20" y2="14"/>
+                                <line x1="23" y1="11" x2="17" y2="11"/>
+                            </svg>
+                            <span class="sr-only" data-i18n="lobby.invitePlayers">Invite Players</span>
+                        </button>
                         <span id="admin-reveal-difficulty-badge" class="stat-badge stat-badge--difficulty"></span>
                     </div>
                 </div>
@@ -1448,9 +1489,13 @@
             <h2 data-i18n="admin.joinTheGame">Join the Game</h2>
             <p data-i18n="admin.enterDisplayName">Enter your display name to join as a player with admin controls.</p>
             <div class="form-group">
+                <!-- #2627: no maxlength attribute on purpose. The cap is set
+                from MAX_NAME_LENGTH (the mirror of const.py) in JS, so a
+                server-side change reaches the field instead of leaving a
+                stale literal behind. -->
                 <input type="text" id="admin-name-input" class="name-input"
                        data-i18n-placeholder="join.namePlaceholder"
-                       placeholder="Your name" maxlength="20"
+                       placeholder="Your name"
                        autocomplete="off" autocapitalize="words">
                 <p id="admin-name-error" class="validation-msg hidden"></p>
             </div>
@@ -1617,14 +1662,17 @@
          loaded before admin.min.js so window.NoSleep is available when
          _requestWakeLock() runs on game start. -->
     <script src="/beatify/static/js/vendor/no-sleep.min.js?v={{ASSET_VER}}"></script>
-    <!-- #1279 step 2: admin.min.js is now an ES module (imports admin/util.js).
-         type="module" loads deferred — its window.* compat shims (escapeHtml,
-         loadStatus, BeatifyHome, …) are set before any consumer reads them,
-         because every consumer (party-lights, tts-settings, wizard) reads admin
-         globals event-driven (after DOMContentLoaded / on click), never at
-         parse time. -->
+    <!-- #1279 step 2: admin.min.js is an ES module (type="module", deferred).
+         #2637: party-lights.js and tts-settings.js used to follow as two classic
+         <script> tags whose only job was to hand admin.js a config getter on
+         `window`. They are imports of the bundle now, so they cannot be loaded
+         in the wrong order and `npm run build:check` covers them.
+         The window globals this bundle still publishes (loadStatus,
+         loadSavedSettings, BeatifyHome, BeatifyPersistSetup,
+         BeatifyNoteLocalSetupWrite, BEATIFY_VERSION) exist for wizard.js and
+         playlist-requests.js, which are separate top-level scripts and cannot
+         import from the bundle. Every one of those reads is event-driven (after
+         DOMContentLoaded / on click), never at parse time. -->
     <script type="module" src="/beatify/static/js/admin.min.js?v={{ASSET_VER}}"></script>
-    <script src="/beatify/static/js/party-lights.min.js?v={{ASSET_VER}}"></script>
-    <script src="/beatify/static/js/tts-settings.js?v={{ASSET_VER}}"></script>
 </body>
 </html>

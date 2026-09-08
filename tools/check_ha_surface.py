@@ -72,14 +72,21 @@ SEAMS: list[tuple[str, str, str]] = [
         "(media_player_driver.PLATFORM depends on it)",
     ),
     (
-        "services/media_player.py",
-        r'if self\._platform == "sonos":\s*\n\s*return await self\._play_via_sonos',
-        "_play_song still dispatches platform 'sonos' to _play_via_sonos",
+        # v4.4.3 (#2676) split platform dispatch out of MediaPlayerService into
+        # one PlaybackStrategy per platform, chosen once in build_strategy().
+        "services/playback/sonos.py",
+        r'platforms\s*:\s*ClassVar\[tuple\[str, \.\.\.\]\]\s*=\s*\([^)]*"sonos"[^)]*\)',
+        "SonosStrategy still claims platform 'sonos'",
     ),
     (
-        "services/media_player.py",
-        r'async def _play_via_sonos.*?"media_player",\s*\n\s*"play_media"',
-        "_play_via_sonos still issues a generic media_player.play_media call",
+        "services/playback/__init__.py",
+        r"_STRATEGIES.*=\s*\([^)]*SonosStrategy[^)]*\)",
+        "build_strategy still routes platform 'sonos' through SonosStrategy",
+    ),
+    (
+        "services/playback/sonos.py",
+        r'async def play\(.*?"media_player",\s*\n\s*"play_media"',
+        "SonosStrategy.play still issues a generic media_player.play_media call",
     ),
     (
         "server/__init__.py",
@@ -117,13 +124,13 @@ def check_seams(read: Callable[[str], str | None]) -> int:
             print(f"  FAIL {rel_path}: {description}")
             failures += 1
 
-    # _play_via_sonos must not have grown a sonos-specific service call, or the
-    # "borrow the sonos path" trick stops being provider-agnostic.
-    source = read("services/media_player.py")
+    # SonosStrategy.play must not have grown a sonos-specific service call, or
+    # the "borrow the sonos path" trick stops being provider-agnostic.
+    source = read("services/playback/sonos.py")
     if source:
-        match = re.search(r"async def _play_via_sonos.*?(?=\n    async def )", source, re.S)
+        match = re.search(r"async def play\(.*?(?=\n    async def |\Z)", source, re.S)
         if match and SONOS_ONLY_SERVICE.search(match.group(0)):
-            print("  FAIL services/media_player.py: _play_via_sonos now calls a sonos.* service")
+            print("  FAIL services/playback/sonos.py: SonosStrategy.play now calls a sonos.* service")
             failures += 1
     return failures
 

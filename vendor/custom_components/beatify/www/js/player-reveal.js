@@ -5,11 +5,11 @@
 
 import {
     state, escapeHtml,
-    prefersReducedMotion, animateValue, animateScoreChange, showPointsPopup,
-    previousState, isPreviousStateInitialized, isStreakMilestone,
+    prefersReducedMotion, animateValue,
+    previousState, isPreviousStateInitialized,
     AnimationUtils, updatePreviousState,
     triggerConfetti, stopConfetti, isTitleArtistMode,
-    createModalFocusTrap
+    createModalFocusTrap, classifyYearsOff
 } from './player-utils.js';
 
 import { renderArtistReveal, renderMovieReveal } from './player-game.js';
@@ -110,12 +110,70 @@ export function renderCollection(player) {
 }
 
 /**
+ * i18n keys for the idle-halt banner, by who is reading it (#2622).
+ *
+ * The banner used to carry ONE sentence for everybody: "Game idle — no one
+ * played this round. Tap Next round to keep going." But "Next round" lives in
+ * `#reveal-admin-controls`, which is `hidden` for guests — so every guest hunted
+ * their phone for an announced button that is not there and then asked out loud,
+ * and the host had to explain that only they can advance. Exported so the pairing
+ * of audience to sentence is testable without a DOM.
+ */
+export var IDLE_HALT_KEYS = {
+    host: 'reveal.idleHaltBanner',
+    guest: 'reveal.idleHaltBannerGuest',
+};
+
+/**
+ * Render the idle-halt banner for the reader in front of it (#2622).
+ *
+ * Both audiences still see the banner — the round really did stall, and a guest
+ * staring at a frozen screen needs to know why. Only the second half of the
+ * sentence changes: the host is told to tap, the guest is told to wait.
+ *
+ * The `data-i18n` attribute is rewritten alongside the text, not just the text:
+ * `initPageTranslations()` re-renders every `[data-i18n]` node on a language
+ * switch, and would otherwise put the host sentence back on a guest's phone.
+ *
+ * @param {HTMLElement|null} banner - #reveal-idle-halt
+ * @param {boolean} halted - server's idle_halt flag
+ * @param {boolean} isHost - is this phone the host's?
+ */
+export function renderIdleHalt(banner, halted, isHost) {
+    if (!banner) return;
+    banner.classList.toggle('hidden', !halted);
+    if (!halted) return;
+
+    var textEl = document.getElementById('reveal-idle-halt-text');
+    if (!textEl) return;
+
+    var key = isHost ? IDLE_HALT_KEYS.host : IDLE_HALT_KEYS.guest;
+    textEl.setAttribute('data-i18n', key);
+    var text = typeof utils.t === 'function' ? utils.t(key) : '';
+    if (text && text !== key) textEl.textContent = text;
+}
+
+/**
  * Update reveal view with round results
  * @param {Object} data - State data from server
  */
 export function updateRevealView(data) {
     var song = data.song || {};
     var players = data.players || [];
+
+    // #2622: hoisted from further down. The idle-halt banner needs to know who
+    // is looking, and it must use the SAME predicate that decides whether the
+    // "Next round" button is on screen (`#reveal-admin-controls` below) — two
+    // separate host checks are exactly how the banner started announcing a
+    // button the reader does not have.
+    var currentPlayer = null;
+    for (var i = 0; i < players.length; i++) {
+        if (players[i].name === state.playerName) {
+            currentPlayer = players[i];
+            break;
+        }
+    }
+    var isHost = !!(currentPlayer && currentPlayer.is_admin);
 
     var roundEl = document.getElementById('reveal-round');
     var totalEl = document.getElementById('reveal-total');
@@ -124,8 +182,8 @@ export function updateRevealView(data) {
 
     // #1012 follow-up: idle-halt notice — the round ended with zero guesses,
     // playback has stopped, and the game is holding here until "Next round".
-    var idleHalt = document.getElementById('reveal-idle-halt');
-    if (idleHalt) idleHalt.classList.toggle('hidden', !data.idle_halt);
+    // #2622: the sentence depends on the reader, see renderIdleHalt().
+    renderIdleHalt(document.getElementById('reveal-idle-halt'), !!data.idle_halt, isHost);
 
     // Auto-advance countdown — mirrors the admin sticky-Next countdown (#1048)
     // and the TV dashboard ring (#1185). Players had no way to see how long the
@@ -238,6 +296,31 @@ export function updateRevealView(data) {
         funFactHeader.style.display = localizedFunFact ? 'flex' : 'none';
     }
 
+    // #2588: Cover-Hinweis, aber nur bei echtem Widerspruch (Variante D).
+    //
+    // Der Fun Fact eines Covers nennt haeufig das Jahr des Originals — direkt
+    // neben der Antwort, mit dem Melde-Knopf daneben. Genau so entstand #2587:
+    // „Randy Newman schrieb den Song 1972" stand neben der richtigen Antwort
+    // 1986, und der Spieler meldete einen Fehler, der keiner war.
+    //
+    // Der Hinweis erscheint deshalb nicht bei jedem der 740 Cover-Eintraege,
+    // sondern nur, wenn im Text wirklich eine andere Jahreszahl steht — der
+    // Server rechnet das aus (`cover_original_year`), weil `alt_artists`
+    // bewusst nicht im Reveal-Payload liegt. Und er nennt die Zahl, statt um
+    // sie herumzureden: die Verwechslung loest man auf, indem man sie benennt.
+    var coverHint = document.getElementById('cover-hint');
+    if (coverHint) {
+        var origJahr = song.cover_original_year;
+        if (origJahr) {
+            coverHint.textContent = utils.t('reveal.coverHint', { year: origJahr })
+                || ('Cover — ' + origJahr + ' war das Original, gesucht ist die gespielte Fassung.');
+            coverHint.classList.remove('hidden');
+        } else {
+            coverHint.textContent = '';
+            coverHint.classList.add('hidden');
+        }
+    }
+
     renderRichSongInfo(song);
 
     renderSongDifficulty(data.song_difficulty);
@@ -249,13 +332,8 @@ export function updateRevealView(data) {
         funFactContainer.classList.toggle('hidden', !hasFunFact && !hasRichInfo);
     }
 
-    var currentPlayer = null;
-    for (var i = 0; i < players.length; i++) {
-        if (players[i].name === state.playerName) {
-            currentPlayer = players[i];
-            break;
-        }
-    }
+    // #2622: currentPlayer is resolved at the top of this function now — the
+    // idle-halt banner needs the same host flag the admin controls use.
 
     // #1180: in Title & Artist mode there is no year, so the year duel /
     // emotion ("BINGO" + "You said × N years × Actually <year>") and the
@@ -272,12 +350,20 @@ export function updateRevealView(data) {
         var chipRowEl = document.getElementById('reveal-chip-row');
         if (chipRowEl) chipRowEl.classList.add('hidden');
     } else {
-        showRevealEmotion(currentPlayer, song.year);
+        // #2624: `difficulty` is the game setting the server scores by; it has
+        // always been in the state and was never read here. state.lastDifficulty
+        // is the lobby's copy, kept only for a payload that omits the field.
+        var difficulty = data.difficulty || state.lastDifficulty || '';
+        showRevealEmotion(currentPlayer, song.year, difficulty);
         // Round-reveal v2: duel + chips + score row replace the old personal result + all-guesses cards.
-        renderDuel(currentPlayer, song.year);
+        renderDuel(currentPlayer, song.year, difficulty);
         renderChipRow(currentPlayer, data);
     }
     renderScoreRow(currentPlayer);
+    // #2601: outside the taMode branch on purpose — a shield can absorb a
+    // missed round in Title & Artist mode too, and that mode hides the duel
+    // and the chip row.
+    renderStreakShield(currentPlayer);
     renderCollection(currentPlayer);
 
     // Cache context for bottom-sheet renderers that run on demand.
@@ -627,6 +713,49 @@ function renderChartBadges(chartInfo) {
         );
     }
 
+    // Charts outside the three big ones. Unlike the UK and German badges above,
+    // these are NOT suppressed by a primary peak: a song that charted at #5 in
+    // the US and #1 in Austria says something with both numbers, and for a
+    // German-speaking party the second one is often the more interesting.
+    // 46 songs in the catalogue carry one of these; 7 have nothing else.
+    var secondary = [
+        ['austrian_peak', 'reveal.chartAustria'],
+        ['swiss_peak', 'reveal.chartSwitzerland'],
+        ['it_peak', 'reveal.chartItaly'],
+        ['fr_peak', 'reveal.chartFrance'],
+        ['spain_peak', 'reveal.chartSpain']
+    ];
+    for (var si = 0; si < secondary.length; si++) {
+        var peak = chartInfo[secondary[si][0]];
+        if (!peak || peak <= 0) continue;
+        badges.push(
+            '<span class="song-badge song-badge--chart">' +
+            '<span class="song-badge-icon">📊</span>' +
+            '#' + peak + ' ' + utils.t(secondary[si][1]) +
+            '</span>'
+        );
+    }
+
+    // Eurovision placements live in their own fields (eurovision-winners.json
+    // carries position, points and country for 72 songs). They are not a chart
+    // peak, so they get their own badge instead of being folded into one of the
+    // three above — and they show alongside a chart peak rather than instead of
+    // it, because a song can have both.
+    if (chartInfo.eurovision_position && chartInfo.eurovision_position > 0) {
+        var evCountry = chartInfo.country
+            ? ' <span class="chart-weeks">· ' + escapeHtml(chartInfo.country) + '</span>'
+            : '';
+        var evPoints = chartInfo.eurovision_points
+            ? ' <span class="chart-weeks">· ' + chartInfo.eurovision_points + ' ' + utils.t('reveal.pointsShort') + '</span>'
+            : '';
+        badges.push(
+            '<span class="song-badge song-badge--chart">' +
+            '<span class="song-badge-icon">🏆</span>' +
+            '#' + chartInfo.eurovision_position + ' ' + utils.t('reveal.chartEurovision') + evCountry + evPoints +
+            '</span>'
+        );
+    }
+
     if (chartInfo.uk_peak && chartInfo.uk_peak > 0 && !chartInfo.billboard_peak) {
         badges.push(
             '<span class="song-badge song-badge--chart">' +
@@ -743,10 +872,18 @@ function getAwardIcon(award) {
 
 /**
  * Show celebration-first emotion before data (Story 9.4)
+ *
+ * #2624: the tiers used to be fixed distances of 2 and 5 years, which agreed
+ * with the server on Normal and nowhere else — on Easy a 6-year miss scored 5
+ * points under the "way off" face, on Hard a 3-year miss scored nothing under
+ * "so close". The bands now come from `classifyYearsOff`, i.e. from the same
+ * `DIFFICULTY_SCORING` table that awards the points.
+ *
  * @param {Object} player - Current player data
  * @param {number} correctYear - The correct year
+ * @param {string} difficulty - Game difficulty from the state ('easy'|'normal'|'hard')
  */
-function showRevealEmotion(player, correctYear) {
+function showRevealEmotion(player, correctYear, difficulty) {
     var emotionEl = document.getElementById('reveal-emotion');
     var personalResult = document.getElementById('personal-result');
     if (!emotionEl) return;
@@ -784,16 +921,21 @@ function showRevealEmotion(player, correctYear) {
 
     if (player && !player.missed_round) {
         var yearsOff = player.years_off || 0;
+        // Server vocabulary: exact > scored (close_range) > close (near_range) > missed.
+        var tier = classifyYearsOff(yearsOff, difficulty);
 
-        if (yearsOff === 0) {
+        if (tier === 'exact') {
             emotionType = 'exact';
             emotionText = randomFrom(emotions.exact);
             subtitle = randomFrom(emotions.exactSub);
-        } else if (yearsOff <= 2) {
+        } else if (tier === 'scored') {
+            // Full points band — worth the praise line on top of the distance.
             emotionType = 'close';
             emotionText = randomFrom(emotions.close);
             subtitle = randomFrom(emotions.closeSub) + ' ' + getOffByText(yearsOff);
-        } else if (yearsOff <= 5) {
+        } else if (tier === 'close') {
+            // Consolation band (near_points): still a friendly face, but the
+            // bare distance rather than a compliment.
             emotionType = 'close';
             emotionText = randomFrom(emotions.close);
             subtitle = getOffByText(yearsOff);
@@ -834,285 +976,45 @@ function showRevealEmotion(player, correctYear) {
 }
 
 // ============================================
-// Personal Result (Story 4.6)
+// Streak shield (#1666, rewired #2601)
 // ============================================
 
 /**
- * Render personal result in reveal view
- * @param {Object} player - Current player data
- * @param {number} correctYear - The correct year
- */
-/**
- * The "your shield took it" line (#1666).
+ * The "your shield took it" line (#1666), rewired for the current reveal (#2601).
  *
  * Deliberately states the streak it saved rather than a bare "shield used":
  * the value of the moment is the run that survived, and the number is what
- * makes it land. Rendered on both the missed-round and the wrong-answer path,
- * because a shield only ever fires on a round the player got wrong.
+ * makes it land.
+ *
+ * It lives directly under the score row because that is where the question
+ * arises — the round scored zero and the streak is still standing. Until #2601
+ * this markup was built by `renderPersonalResult`, which lost its last caller
+ * in the #1611 reveal rework: the shield fired, the streak survived, and the
+ * player was told nothing. One element, filled on both paths (wrong answer and
+ * missed round), because a shield only ever fires on a round the player got
+ * wrong and both of those run through this same card.
+ *
+ * @param {Object|null} player - Current player data from the REVEAL payload
  */
-function renderStreakShieldUsed(player) {
+export function renderStreakShield(player) {
+    var el = document.getElementById('reveal-streak-shield');
+    if (!el) return;
+
+    if (!player || !player.streak_shield_used) {
+        el.classList.add('hidden');
+        el.innerHTML = '';
+        return;
+    }
+
     var streak = player.streak || 0;
-    var text = utils.t('reveal.streakShieldUsed', { streak: streak });
-    return '<div class="streak-shield-used">' +
-               '<span class="streak-shield-icon">🛡️</span>' +
-               '<span class="streak-shield-text">' + text + '</span>' +
-           '</div>';
+    var text = utils.t('reveal.streakShieldUsed', { streak: streak }) ||
+               ('Shield used \u2014 ' + streak + '-streak saved!');
+    el.innerHTML =
+        '<span class="streak-shield-icon" aria-hidden="true">\ud83d\udee1\ufe0f</span>' +
+        '<span class="streak-shield-text">' + escapeHtml(text) + '</span>';
+    el.classList.remove('hidden');
 }
 
-function renderPersonalResult(player, correctYear) {
-    var resultContent = document.getElementById('result-content');
-    if (!resultContent) return;
-
-    if (!player) {
-        resultContent.innerHTML = '<div class="result-missed">' + utils.t('reveal.playerNotFound') + '</div>';
-        return;
-    }
-
-    if (player.missed_round) {
-        var missedHtml =
-            '<div class="result-missed-container">' +
-                '<div class="result-missed-icon">⏰</div>' +
-                '<div class="result-missed-text">' + utils.t('reveal.noSubmission') + '</div>' +
-            '</div>';
-
-        // #1666: a shield absorbed this miss — the streak is intact, so the
-        // "lost your streak" line would be a lie. Say what actually happened
-        // instead; a wrong answer that leaves the streak standing with no
-        // explanation reads as a scoring bug.
-        if (player.streak_shield_used) {
-            missedHtml += renderStreakShieldUsed(player);
-        }
-        var previousStreak = player.previous_streak || 0;
-        if (previousStreak >= 2) {
-            missedHtml +=
-                '<div class="streak-broken">' +
-                    '<span class="streak-broken-icon">💔</span>' +
-                    '<span class="streak-broken-text">Lost ' + previousStreak + '-streak!</span>' +
-                '</div>';
-        }
-
-        missedHtml += '<div class="result-score is-zero">0 pts</div>';
-        resultContent.innerHTML = missedHtml;
-        return;
-    }
-
-    var yearsOff = player.years_off || 0;
-    var yearsOffText = yearsOff === 0 ? utils.t('reveal.exact') :
-                       yearsOff === 1 ? utils.t('reveal.yearOff', { years: 1 }) :
-                       utils.t('reveal.yearsOff', { years: yearsOff });
-
-    var resultClass = yearsOff === 0 ? 'is-exact' :
-                      yearsOff <= 3 ? 'is-close' : 'is-far';
-
-    var speedMultiplier = player.speed_multiplier || 1.0;
-    var baseScore = player.base_score || 0;
-    var hasSpeedBonus = speedMultiplier > 1.0;
-
-    var streakBonus = player.streak_bonus || 0;
-
-    var artistBonus = player.artist_bonus || 0;
-
-    var scoreBreakdown = '';
-    if (hasSpeedBonus && baseScore > 0) {
-        scoreBreakdown =
-            '<div class="result-row">' +
-                '<span class="result-label">' + utils.t('reveal.baseScore') + '</span>' +
-                '<span class="result-value">' + baseScore + ' pts</span>' +
-            '</div>' +
-            '<div class="result-row">' +
-                '<span class="result-label">' + utils.t('reveal.speedBonus') + '</span>' +
-                '<span class="result-value is-bonus">' + speedMultiplier.toFixed(2) + 'x</span>' +
-            '</div>';
-    }
-
-    var betOutcomeHtml = '';
-    if (player.bet_outcome === 'won') {
-        betOutcomeHtml =
-            '<div class="result-row bet-won-row">' +
-                '<span class="result-label">🎲 ' + utils.t('reveal.betWon').replace('! 2x points', '') + '</span>' +
-                '<span class="result-value is-bet-won">2x</span>' +
-            '</div>';
-    } else if (player.bet_outcome === 'lost') {
-        betOutcomeHtml =
-            '<div class="result-row bet-lost-row">' +
-                '<span class="result-label">🎲 ' + utils.t('reveal.betLost') + '</span>' +
-                '<span class="result-value is-bet-lost">-</span>' +
-            '</div>';
-    }
-
-    var streakBonusHtml = '';
-    if (streakBonus > 0) {
-        streakBonusHtml =
-            '<div class="result-row streak-bonus-row">' +
-                '<span class="result-label">' + player.streak + '-streak bonus!</span>' +
-                '<span class="result-value is-streak">+' + streakBonus + ' pts</span>' +
-            '</div>';
-    }
-
-    var artistBonusHtml = '';
-    if (artistBonus > 0) {
-        artistBonusHtml =
-            '<div class="result-row artist-bonus-row">' +
-                '<span class="result-label">🎤 ' + (utils.t('artistChallenge.artistBonus') || 'Artist Bonus') + '</span>' +
-                '<span class="result-value">+' + artistBonus + ' pts</span>' +
-            '</div>';
-    }
-
-    var totalScore = player.round_score + streakBonus + artistBonus;
-    var hasBonuses = streakBonus > 0 || artistBonus > 0;
-
-    var isBigScore = player.round_score >= 20;
-    var prevPlayer = previousState.players[player.name];
-    var prevScore = prevPlayer ? prevPlayer.score : (player.score - totalScore);
-    var prevStreak = prevPlayer ? prevPlayer.streak : 0;
-    var streakMilestone = isStreakMilestone(prevStreak, player.streak || 0);
-
-    resultContent.innerHTML =
-        '<div class="result-row">' +
-            '<span class="result-label">' + utils.t('reveal.yourGuess') + '</span>' +
-            '<span class="result-value">' + (player.guess || 'n/a') + '</span>' +
-        '</div>' +
-        '<div class="result-row">' +
-            '<span class="result-label">' + utils.t('reveal.correctYear') + '</span>' +
-            '<span class="result-value">' + correctYear + '</span>' +
-        '</div>' +
-        '<div class="result-row">' +
-            '<span class="result-label">' + utils.t('reveal.accuracy') + '</span>' +
-            '<span class="result-value ' + resultClass + '">' + yearsOffText + '</span>' +
-        '</div>' +
-        scoreBreakdown +
-        betOutcomeHtml +
-        '<div class="result-score" id="personal-result-score">+<span class="score-value">0</span> pts</div>' +
-        (player.streak_shield_used ? renderStreakShieldUsed(player) : '') +
-        streakBonusHtml +
-        artistBonusHtml +
-        (hasBonuses ? '<div class="result-total">' + utils.t('reveal.total') + ': +<span class="total-value">0</span> pts</div>' : '');
-
-    var scoreValueEl = resultContent.querySelector('.score-value');
-    if (scoreValueEl) {
-        animateScoreChange(scoreValueEl, 0, player.round_score, {
-            betWon: player.bet_outcome === 'won',
-            betLost: player.bet_outcome === 'lost',
-            streakMilestone: streakMilestone,
-            isBigScore: isBigScore
-        });
-
-        if (player.bet_outcome === 'won' && player.round_score > 0) {
-            setTimeout(function() {
-                var scoreEl = document.getElementById('personal-result-score');
-                if (scoreEl) {
-                    showPointsPopup(scoreEl, player.round_score, { isBetWin: true });
-                }
-            }, 200);
-        }
-    }
-
-    var totalValueEl = resultContent.querySelector('.total-value');
-    if (totalValueEl && hasBonuses) {
-        setTimeout(function() {
-            animateValue(totalValueEl, 0, totalScore, 600);
-        }, 300);
-
-        if (streakMilestone) {
-            setTimeout(function() {
-                var totalEl = resultContent.querySelector('.result-total');
-                if (totalEl) {
-                    var milestoneBonus = {3: 20, 5: 50, 10: 100}[streakMilestone] || 0;
-                    showPointsPopup(totalEl, milestoneBonus, {
-                        isStreak: true,
-                        text: '+' + milestoneBonus + ' ' + streakMilestone + '-Streak!'
-                    });
-                }
-            }, 500);
-        }
-    }
-}
-
-// ============================================
-// Player Result Cards (Story 9.10)
-// ============================================
-
-/**
- * Render player result cards on reveal (Story 9.10)
- * @param {Array} players - All players from state
- */
-function renderPlayerResultCards(players, closestWinsMode) {
-    var container = document.getElementById('reveal-results-cards');
-    if (!container) return;
-
-    if (!players || players.length === 0) {
-        container.innerHTML = '';
-        return;
-    }
-
-    // Issue #442: Determine closest player(s) for highlight
-    var bestDiff = null;
-    if (closestWinsMode) {
-        players.forEach(function(p) {
-            if (!p.missed_round && p.years_off != null) {
-                if (bestDiff === null || p.years_off < bestDiff) {
-                    bestDiff = p.years_off;
-                }
-            }
-        });
-    }
-
-    var sorted = players.slice().sort(function(a, b) {
-        return (b.round_score || 0) - (a.round_score || 0);
-    });
-
-    var html = '<div class="results-cards-scroll">';
-
-    sorted.forEach(function(player) {
-        var isCurrentPlayer = player.name === state.playerName;
-        var isMissed = player.missed_round === true;
-        var yearsOff = player.years_off || 0;
-        var roundScore = player.round_score || 0;
-
-        var scoreClass = isMissed ? 'is-score-zero' :
-                         roundScore >= 10 ? 'is-score-high' :
-                         roundScore >= 1 ? 'is-score-medium' : 'is-score-zero';
-
-        // Issue #442: Mark closest player(s) in Closest Wins mode
-        var isClosest = closestWinsMode && !isMissed && bestDiff !== null && (player.years_off || 0) === bestDiff;
-        var closestClass = isClosest ? ' is-closest-winner' : '';
-
-        var guessDisplay = isMissed ? '—' : (player.guess || 'n/a');
-        var yearsOffDisplay = isMissed ? utils.t('reveal.noGuessShort') :
-                              yearsOff === 0 ? utils.t('reveal.exact') :
-                              utils.t('reveal.shortOff', { years: yearsOff });
-
-        var betIndicator = player.bet ? '<span class="card-bet">🎲</span>' : '';
-
-        var closestBadge = isClosest ? '<span class="closest-winner-badge">🎯</span>' : '';
-
-        var artistBadge = '';
-        if (player.artist_bonus && player.artist_bonus > 0) {
-            artistBadge = '<span class="player-card-artist-badge">🎤 +' + player.artist_bonus + '</span>';
-        }
-
-        var stealIndicator = '';
-        if (player.stole_from) {
-            stealIndicator = '<div class="steal-badge"><span class="steal-badge-icon">🥷</span>' +
-                utils.t('steal.stolenFrom', { name: escapeHtml(player.stole_from) }) + '</div>';
-        } else if (player.was_stolen_by && player.was_stolen_by.length > 0) {
-            var stealerNames = player.was_stolen_by.map(escapeHtml).join(', ');
-            stealIndicator = '<div class="steal-badge steal-badge-victim"><span class="steal-badge-icon">🎯</span>' +
-                utils.t('steal.stolenBy', { name: stealerNames }) + '</div>';
-        }
-
-        html += '<div class="result-card ' + scoreClass + closestClass + (isCurrentPlayer ? ' is-current' : '') + '">' +
-            '<div class="card-name">' + escapeHtml(player.name) + betIndicator + closestBadge + '</div>' +
-            '<div class="card-guess">' + guessDisplay + '</div>' +
-            '<div class="card-accuracy">' + yearsOffDisplay + '</div>' +
-            stealIndicator +
-            '<div class="card-score">+' + roundScore + artistBadge + '</div>' +
-        '</div>';
-    });
-
-    html += '</div>';
-    container.innerHTML = html;
-}
 
 // ===========================================================================
 // Round-reveal v2: Duel / Chips / Score row / Sheets (DESIGN.md Variant B)
@@ -1122,8 +1024,9 @@ function renderPlayerResultCards(players, closestWinsMode) {
  * Populate the duel — your guess × gap × correct year.
  * @param {Object|null} player - Current player data
  * @param {number|null} correctYear - Server-reported correct year
+ * @param {string} difficulty - Game difficulty from the state ('easy'|'normal'|'hard')
  */
-function renderDuel(player, correctYear) {
+function renderDuel(player, correctYear, difficulty) {
     var yourEl = document.getElementById('duel-your-year');
     var gapCountEl = document.getElementById('duel-gap-count');
     var gapUnitEl = document.getElementById('duel-gap-unit');
@@ -1145,13 +1048,15 @@ function renderDuel(player, correctYear) {
         ? (utils.t('reveal.duel.yearUnit') || 'year')
         : (utils.t('reveal.duel.yearsUnit') || 'years');
 
-    // Color the gap by proximity. Matches the emotion color of the duel header.
+    // Color the gap by proximity. Matches the emotion color of the duel header
+    // — same classifier, so the number and the face can never disagree (#2624).
     var gapEl = gapCountEl.closest('.duel-gap');
     if (gapEl) {
+        var tier = classifyYearsOff(yearsOff, difficulty);
         gapEl.classList.remove('duel-gap--exact', 'duel-gap--close', 'duel-gap--wrong');
-        if (yearsOff === 0) gapEl.classList.add('duel-gap--exact');
-        else if (yearsOff <= 5) gapEl.classList.add('duel-gap--close');
-        else gapEl.classList.add('duel-gap--wrong');
+        if (tier === 'exact') gapEl.classList.add('duel-gap--exact');
+        else if (tier === 'missed') gapEl.classList.add('duel-gap--wrong');
+        else gapEl.classList.add('duel-gap--close');
     }
 }
 

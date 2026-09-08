@@ -73,6 +73,8 @@ The mixin relies on attributes / methods the host class owns and that live on
 * ``self._lights_set_phase`` / ``self._lights_flash`` / ``self._party_lights`` /
   ``self.disable_party_lights`` — the party-light hooks (live on
   ``MediaControlMixin``).
+* ``self.stop_media`` — the #2605 terminal stop in ``advance_to_end`` (also
+  lives on ``MediaControlMixin``).
 * ``self._cancel_auto_advance`` — the #1012 REVEAL auto-advance cancel hook
   (lives on ``RevealAutoAdvanceMixin``).
 * ``self.end_round`` / ``self.play_deferred_song`` / ``self._on_round_end`` —
@@ -123,24 +125,20 @@ class RevealTransitionMixin:
         # or if no one has guessed yet (don't block early reveal for ignored challenges)
         if self.artist_challenge_enabled and self.artist_challenge:
             has_winner = getattr(self.artist_challenge, "winner", None) is not None
-            anyone_guessed = any(
-                p.has_artist_guess for p in self.players.values() if p.is_active
-            )
+            anyone_guessed = any(p.has_artist_guess for p in self._active_guessers())
             if not has_winner and anyone_guessed:
-                for player in self.players.values():
-                    if player.is_active and not player.has_artist_guess:
+                for player in self._active_guessers():
+                    if not player.has_artist_guess:
                         return False
 
         # Issue #28: If movie quiz enabled and active, check movie guesses
         # Skip check if challenge already has correct guesses or no one interacted
         if self.movie_quiz_enabled and self.movie_challenge:
             has_correct = len(self.movie_challenge.correct_guesses) > 0
-            anyone_guessed = any(
-                p.has_movie_guess for p in self.players.values() if p.is_active
-            )
+            anyone_guessed = any(p.has_movie_guess for p in self._active_guessers())
             if not has_correct and anyone_guessed:
-                for player in self.players.values():
-                    if player.is_active and not player.has_movie_guess:
+                for player in self._active_guessers():
+                    if not player.has_movie_guess:
                         return False
 
         # #1180: In Title & Artist mode, wait for every active player to submit
@@ -148,11 +146,21 @@ class RevealTransitionMixin:
         # year guess, so there is no "winner" short-circuit — each player guesses
         # independently and we hold PLAYING until all are in.
         if self.title_artist_mode and self.title_artist_challenge:
-            for player in self.players.values():
-                if player.is_active and not player.has_title_artist_guess:
+            for player in self._active_guessers():
+                if not player.has_title_artist_guess:
                     return False
 
         return True
+
+    def _active_guessers(self) -> list:
+        """Players whose guess the early reveal is allowed to wait for (#2545).
+
+        ``all_submitted()`` has excluded out-of-play players since #827/#2578,
+        but the follow-up loops below used to filter only ``is_active`` and
+        ``eliminated``. A finale-playoff spectator is not eliminated, so their
+        missing challenge guess could hold the room until the timer expired.
+        """
+        return [p for p in self.players.values() if p.is_active and not p.out_of_play]
 
     async def _trigger_early_reveal(self) -> None:
         """
@@ -369,6 +377,27 @@ class RevealTransitionMixin:
         self._cancel_auto_advance()  # #1012
         # #1273: transition clears reveal_started_at (#1048) + notifies (#441).
         self._set_phase(GamePhase.END)
+
+        # #2605: stop the round's song here, at the terminal, not only in the
+        # callers that happen to remember.
+        #
+        # `admin_end_game`, `admin_next_round` and the REST `end-game` view all
+        # call `stop_media()` before they get here. The unattended final round
+        # does not: `_reveal_auto_advance` breaks out of its wait loop on
+        # `elapsed >= hard_cap` as well as on `_song_finished()`, and on the
+        # last round that goes straight into the game-end ceremony. With a
+        # REVEAL timer set, the game therefore ended while the round's song was
+        # still playing, and nothing on the way to END asked the speaker to
+        # stop — the podium went up over Beatify's own music.
+        #
+        # Idempotent: `media_stop` on an already-idle speaker is a no-op, so
+        # the callers that stop first lose nothing. It runs BEFORE the podium
+        # TTS below on purpose — announce_winner speaks through this same
+        # speaker, and a stop afterwards would cut it off.
+        try:
+            await self.stop_media()
+        except Exception as err:  # noqa: BLE001 — a stop must never break the podium
+            _LOGGER.warning("advance_to_end: stop playback failed: %s (#2605)", err)
 
         # Issue #331: Celebrate with Party Lights, then stop (#553)
         if self._party_lights:
