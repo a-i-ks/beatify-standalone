@@ -12,6 +12,7 @@ from aiohttp import WSCloseCode, WSMsgType, web
 
 from custom_components.beatify.const import (
     ERR_GAME_NOT_STARTED,
+    ERR_INTERNAL,
     LOBBY_DISCONNECT_GRACE_PERIOD,
     MAX_GUESS_LEN,
 )
@@ -84,11 +85,17 @@ class BeatifyWebSocketHandler:
         """
         self.hass = hass
         self.connections: set[web.WebSocketResponse] = set()
+        # Issue #477 / #2638: the admin spectator socket (a host watching
+        # without being a player). This handler opens it, redacts for it and
+        # drops it on disconnect, so it lives here rather than on GameState —
+        # an aiohttp socket is not game logic. GameState calls back into
+        # clear_admin_socket on teardown (see register_reset_callback).
+        self.admin_ws: web.WebSocketResponse | None = None
         self._admin_disconnect_task: asyncio.Task | None = None
         self._analytics: AnalyticsStorage | None = None
         # #1702: game_ids whose terminal end sequence (finalize_game +
         # record_game + advance_to_end) has already been claimed. An admin has
-        # two admin-capable sockets (participant WS + spectator _admin_ws); on
+        # two admin-capable sockets (participant WS + spectator admin_ws); on
         # the final round both can pass the REVEAL/last_round checks. The claim
         # (see _claim_game_end) makes the end run exactly once per game.
         self._recorded_game_ids: set[str] = set()
@@ -119,6 +126,17 @@ class BeatifyWebSocketHandler:
             "report_data": handle_report_data,
             "round_timeout": handle_round_timeout,
         }
+
+    def clear_admin_socket(self) -> None:
+        """Forget the admin spectator socket (#477 / #2638).
+
+        Wired into ``GameState.register_reset_callback`` at the composition
+        root, so a game teardown (``end_game``) or rebuild (``rematch_game``)
+        drops the reference exactly where ``_reset_game_internals`` used to
+        null ``GameState._admin_ws``. The connection itself stays open — this
+        is a de-reference, not a close.
+        """
+        self.admin_ws = None
 
     def set_analytics(self, analytics: AnalyticsStorage) -> None:
         """
@@ -167,7 +185,7 @@ class BeatifyWebSocketHandler:
     def _release_game_end(self, game_id: str | None) -> None:
         """Release a claimed game-end so the terminal sequence can be retried (#1754).
 
-        ``_finalize_and_end`` claims BEFORE its side effects (``record_game``
+        ``finalize_and_end`` claims BEFORE its side effects (``record_game``
         storage I/O + ``advance_to_end``). If either raises, the claim would
         otherwise be burned: every retry hits "already claimed" and returns
         without advancing, stranding the game in REVEAL/PAUSED. Discarding the
@@ -242,16 +260,53 @@ class BeatifyWebSocketHandler:
         try:
             async for msg in ws:
                 if msg.type == WSMsgType.TEXT:
+                    # #2336: parsing and dispatch used to share one `except`,
+                    # and every handler failure was logged as "Failed to parse
+                    # WebSocket message". That does not merely under-describe
+                    # the error — it points at the wrong party. Anyone reading
+                    # the log concludes the client sent malformed JSON and
+                    # looks there.
+                    #
+                    # The case that made it visible: `finalize_and_end`
+                    # re-raises on purpose (#1754) so the game-end claim is
+                    # released and a retry can re-run the terminal sequence.
+                    # The design works — but the admin got no frame back, so
+                    # "End game" read as a dead button with a misleading log
+                    # line beside it.
                     try:
                         parsed = msg.json()
-                        _WIRE_LOGGER.debug(
-                            "[WS-Debug] recv type=%s keys=%s",
-                            parsed.get("type") if isinstance(parsed, dict) else "?",
-                            list(parsed.keys()) if isinstance(parsed, dict) else None,
-                        )
-                        await self._handle_message(ws, parsed)
-                    except Exception as err:  # noqa: BLE001
+                    except (ValueError, TypeError) as err:
                         _LOGGER.warning("Failed to parse WebSocket message: %s", err)
+                        continue
+
+                    _WIRE_LOGGER.debug(
+                        "[WS-Debug] recv type=%s keys=%s",
+                        parsed.get("type") if isinstance(parsed, dict) else "?",
+                        list(parsed.keys()) if isinstance(parsed, dict) else None,
+                    )
+                    try:
+                        await self._handle_message(ws, parsed)
+                    except Exception:
+                        # exception(), not warning(): without the traceback the
+                        # only way to find the raising handler is to guess.
+                        _LOGGER.exception(
+                            "WebSocket handler failed for message type %s",
+                            parsed.get("type") if isinstance(parsed, dict) else "?",
+                        )
+                        # Tell the sender. A dead button should look dead —
+                        # the #1754 retry only helps someone who knows to try
+                        # again. Sending must not itself kill the connection,
+                        # so its own failure is swallowed deliberately.
+                        try:
+                            await ws.send_json(
+                                {
+                                    "type": "error",
+                                    "code": ERR_INTERNAL,
+                                    "message": "Something went wrong. Try again.",
+                                }
+                            )
+                        except Exception:  # noqa: BLE001
+                            _LOGGER.debug("Could not deliver error frame")
                 elif msg.type == WSMsgType.ERROR:
                     err_msg = str(ws.exception())
                     _LOGGER.error("WebSocket error: %s", err_msg)
@@ -348,8 +403,9 @@ class BeatifyWebSocketHandler:
 
         # Issue #550: Ensure admin spectator WS is included
         game_state = get_game_state(self.hass)
-        if game_state and game_state._admin_ws is not None:
-            targets.add(game_state._admin_ws)
+        admin_ws = self.admin_ws if game_state else None
+        if admin_ws is not None:
+            targets.add(admin_ws)
 
         if not targets:
             return
@@ -360,8 +416,6 @@ class BeatifyWebSocketHandler:
         # before guessing. Redact per-recipient: only the spectator admin WS
         # gets the answers; every player connection gets a redacted copy.
         player_message = self._redact_for_player(message, game_state)
-
-        admin_ws = game_state._admin_ws if game_state else None
 
         # #1711: there are at most two payload variants per broadcast (the
         # admin/spectator copy and the redacted player copy). Serialize each to a
@@ -400,14 +454,23 @@ class BeatifyWebSocketHandler:
                 GamePhase,
             )
 
-            if (
-                game_state.title_artist_mode
-                and game_state.phase == GamePhase.PLAYING
-                and isinstance(message.get("song"), dict)
-            ):
+            playing_with_song = game_state.phase == GamePhase.PLAYING and isinstance(
+                message.get("song"), dict
+            )
+            if game_state.title_artist_mode and playing_with_song:
                 song = dict(message["song"])
                 song["artist"] = REDACTED_PLACEHOLDER
                 song["title"] = REDACTED_PLACEHOLDER
+                return {**message, "song": song}
+            # #2550: an active artist challenge makes song.artist the answer
+            # here too. The title is not part of that challenge and stays.
+            if (
+                playing_with_song
+                and getattr(game_state, "artist_challenge_enabled", False)
+                and getattr(game_state, "artist_challenge", None) is not None
+            ):
+                song = dict(message["song"])
+                song["artist"] = REDACTED_PLACEHOLDER
                 return {**message, "song": song}
         return message
 
@@ -518,8 +581,8 @@ class BeatifyWebSocketHandler:
             player.connected = False
 
         # Issue #477: Clear admin spectator WS if it disconnected
-        if game_state._admin_ws is ws:
-            game_state._admin_ws = None
+        if self.admin_ws is ws:
+            self.admin_ws = None
             _LOGGER.info("Admin spectator WebSocket disconnected")
 
         if not player_name or not player:
@@ -634,5 +697,9 @@ class BeatifyWebSocketHandler:
                         "Error closing WebSocket during unload", exc_info=True
                     )
         self.connections.clear()
+        # #2638: the admin spectator socket is one of the connections just
+        # closed above, so drop the handler's own reference too — the owner
+        # closes it AND forgets it.
+        self.admin_ws = None
 
         _LOGGER.debug("Closed all WebSocket connections on unload")

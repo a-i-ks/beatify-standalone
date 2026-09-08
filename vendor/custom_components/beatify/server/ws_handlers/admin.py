@@ -14,74 +14,25 @@ from typing import TYPE_CHECKING
 from aiohttp import web
 
 from custom_components.beatify.const import (
-    DOMAIN,
     ERR_GAME_NOT_STARTED,
     ERR_INVALID_ACTION,
     ERR_MEDIA_PLAYER_UNAVAILABLE,
     ERR_NO_SONGS_REMAINING,
     ERR_NOT_ADMIN,
     ERR_UNAUTHORIZED,
+    MIN_PLAYERS,
 )
 from custom_components.beatify.game.state import GamePhase, GameState
 from custom_components.beatify.server.serializers import build_state_message
-from custom_components.beatify.server.ws_handlers._helpers import _is_ha_authenticated
+from custom_components.beatify.server.ws_handlers._helpers import (
+    _is_ha_authenticated,
+    finalize_and_end,
+)
 
 if TYPE_CHECKING:
     from custom_components.beatify.server.websocket import BeatifyWebSocketHandler
 
 _LOGGER = logging.getLogger(__name__)
-
-
-async def _finalize_and_end(
-    handler: BeatifyWebSocketHandler, game_state: GameState
-) -> None:
-    """Record game stats + run the game-end ceremony exactly once (#1702/#1753).
-
-    The final-round terminal path is reachable from THREE places at the same
-    time: the two admin-capable sockets (participant WS + spectator
-    ``_admin_ws``) driving ``next_round``/``end_game``, and the unattended
-    REVEAL auto-advance carrying the final round (#1753, wired via
-    ``GameState.set_game_end_callback``). Gating on the handler's one-shot claim
-    keyed by ``game_id`` makes ``finalize_game`` / ``record_game`` (double
-    stats) and ``advance_to_end`` (double podium TTS) fire at most once per
-    game. The loser skips straight to the broadcast its caller performs.
-
-    #1754: the claim is taken BEFORE the side effects (``record_game`` storage
-    I/O + ``advance_to_end``). If either raises, the claim is released so a
-    retry can re-run the terminal sequence instead of stranding the game in
-    REVEAL/PAUSED — then the error propagates to the caller.
-
-    #1725: before claiming/finalizing, offer a finale sudden-death tiebreaker.
-    When the host opted in and the game would end on a tie for first with
-    unplayed songs left, ``maybe_start_finale_playoff`` eliminates the non-tied
-    players and starts one more playoff round; the game stays in PLAYING and we
-    return WITHOUT finalizing, so the caller re-broadcasts the live round. On a
-    clear winner / 0 songs left / cap reached it's a no-op and the normal
-    finalize path runs.
-    """
-    if await game_state.maybe_start_finale_playoff():
-        _LOGGER.info("Finale tiebreaker armed — playoff round started, not ending")
-        return
-
-    if not handler._claim_game_end(game_state.game_id):
-        _LOGGER.debug("Game-end already claimed for %s — skipping", game_state.game_id)
-        return
-
-    try:
-        stats_service = handler.hass.data.get(DOMAIN, {}).get("stats")
-        if stats_service:
-            game_summary = game_state.finalize_game()
-            await stats_service.record_game(
-                game_summary, difficulty=game_state.difficulty
-            )
-            _LOGGER.debug("Game stats recorded")
-
-        await game_state.advance_to_end()
-    except Exception:
-        # #1754: release the claim so a retry re-runs the end sequence rather
-        # than hitting "already claimed" and stranding the game in REVEAL.
-        handler._release_game_end(game_state.game_id)
-        raise
 
 
 async def handle_admin_connect(
@@ -106,7 +57,7 @@ async def handle_admin_connect(
         )
         return
 
-    game_state._admin_ws = ws
+    handler.admin_ws = ws
     _LOGGER.info("Admin spectator connected via WebSocket")
 
     await ws.send_json({"type": "admin_connect_ack", "game_id": game_state.game_id})
@@ -124,7 +75,7 @@ async def handle_admin(
     """Handle admin action messages — dispatches to admin sub-handlers."""
     action = data.get("action")
 
-    is_admin_ws = game_state._admin_ws is not None and game_state._admin_ws is ws
+    is_admin_ws = handler.admin_ws is not None and handler.admin_ws is ws
 
     sender = None
     for player in list(game_state.players.values()):
@@ -179,6 +130,21 @@ async def admin_start_game(
                 "type": "error",
                 "code": ERR_INVALID_ACTION,
                 "message": "Game already started",
+            }
+        )
+        return
+
+    # #2497: the minimum-player check used to live in GameState.start_game(),
+    # which no production path calls — so a game could be started with a single
+    # player. It belongs here rather than inside start_round(): start_round runs
+    # for every round of every game, while this is a property of *starting* one,
+    # and only here is there a socket to tell the host why nothing happened.
+    if len(game_state.players) < MIN_PLAYERS:
+        await ws.send_json(
+            {
+                "type": "error",
+                "code": ERR_GAME_NOT_STARTED,
+                "message": f"Need at least {MIN_PLAYERS} players to start",
             }
         )
         return
@@ -246,7 +212,7 @@ async def admin_next_round(
         # ends, so accepted near-misses count toward the leaderboard.
         await game_state.resolve_title_artist_if_pending()
         # #1702: a second admin-capable socket (participant WS + spectator
-        # _admin_ws) may have advanced/ended the game while we awaited above.
+        # handler.admin_ws) may have advanced/ended the game while we awaited above.
         # Re-check before driving the round forward; if it already left REVEAL,
         # just re-broadcast the current state.
         if game_state.phase != GamePhase.REVEAL:
@@ -255,7 +221,7 @@ async def admin_next_round(
         if game_state.last_round:
             # #1702: finalize + record + advance run exactly once per game even
             # if both admin sockets reach here.
-            await _finalize_and_end(handler, game_state)
+            await finalize_and_end(handler, game_state)
             await handler.broadcast_state()
         else:
             success = await game_state.start_round()
@@ -272,7 +238,7 @@ async def admin_next_round(
                 )
                 await handler.broadcast_state()
             else:
-                await _finalize_and_end(handler, game_state)
+                await finalize_and_end(handler, game_state)
                 await handler.broadcast_state()
     else:
         await ws.send_json(
@@ -389,7 +355,7 @@ async def admin_end_game(
 
     # #1702: record + end ceremony run once per game (shared claim with the
     # next_round terminal path).
-    await _finalize_and_end(handler, game_state)
+    await finalize_and_end(handler, game_state)
     _LOGGER.info(
         "Admin ended game early at round %d - players preserved for rematch",
         game_state.round,
@@ -490,7 +456,7 @@ async def admin_rematch_game(
     await game_state.announce_rematch()
     _LOGGER.info("Rematch started with %d players", player_count)
 
-    game_state._admin_ws = ws
+    handler.admin_ws = ws
     await ws.send_json(
         {
             "type": "admin_token_update",

@@ -93,7 +93,7 @@ async def test_bundled_playlists_carry_spotify_uris(app):
         ("/beatify/admin", 200),
         ("/beatify/play", 200),
         ("/beatify/static/player.html", 200),
-        ("/beatify/static/js/player.js", 200),
+        ("/beatify/static/js/player.bundle.min.js", 200),
         ("/beatify/api/status", 200),
     ],
 )

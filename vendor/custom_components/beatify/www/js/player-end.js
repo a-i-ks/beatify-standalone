@@ -12,9 +12,70 @@ import { showToast } from './notify.js';
 
 var utils = window.BeatifyUtils || {};
 
+// #2582: die Punkte-Einheit fuer die Vinyl-Grafik, die Gaeste teilen. Sie stand
+// dort hartkodiert englisch, waehrend der Rest des Endbildschirms uebersetzt
+// ist. `reveal.pointsShort` gibt es in allen sechs Sprachen (de „Pkt.").
+//
+// Faellt auf 'PTS' zurueck, wenn i18n noch nicht geladen ist oder `t()` den
+// Schluessel selbst zurueckgibt: eine englische Einheit ist besser als eine
+// Grafik mit „reveal.pointsShort" darauf.
+function _ptsLabel() {
+    var s = typeof utils.t === 'function' ? utils.t('reveal.pointsShort') : '';
+    if (!s || String(s).indexOf('reveal.') === 0) return 'PTS';
+    return String(s).toUpperCase();
+}
+
 // ============================================
 // End View (Story 5.6)
 // ============================================
+
+/**
+ * #2618: fill the "the game is over, you are a guest" block on the end view.
+ *
+ * `handleGameEnded` in player-core.js used to write two English literals here
+ * ("Thanks for playing!" / "Scan the QR code again to join the next game."),
+ * so every game ended with untranslated text inside an otherwise translated
+ * page. The first sentence has an i18n key the static markup in player.html
+ * already uses (`leaderboard.thanksEmoji`); the second one got its own key in
+ * all six locales.
+ *
+ * Lives here rather than in the core entry point because the end view is this
+ * module's job, and because it makes the block testable on its own.
+ *
+ * The nodes are built with createElement instead of an innerHTML string: a
+ * translation is data, and data must not be parsed as markup.
+ *
+ * @param {HTMLElement|null} container - #end-player-message
+ */
+export function renderEndPlayerMessage(container) {
+    if (!container) return;
+
+    var thanksEl = document.createElement('p');
+    thanksEl.textContent = _endText('leaderboard.thanksEmoji', 'Thanks for playing!');
+
+    var hintEl = document.createElement('p');
+    hintEl.className = 'rejoin-hint';
+    hintEl.textContent = _endText(
+        'leaderboard.rejoinHint',
+        'Scan the QR code again to join the next game.'
+    );
+
+    container.innerHTML = '';
+    container.appendChild(thanksEl);
+    container.appendChild(hintEl);
+    container.classList.remove('hidden');
+}
+
+/**
+ * i18n lookup with a real fallback. `t()` returns the KEY on a miss (#1402-B8),
+ * so `t(k) || fallback` can never fire — the key is truthy. Same guard shape as
+ * `_ptsLabel` above.
+ */
+function _endText(key, fallback) {
+    var s = typeof utils.t === 'function' ? utils.t(key) : '';
+    if (!s || String(s) === key) return fallback;
+    return String(s);
+}
 
 /**
  * Update end view with final standings and stats
@@ -36,7 +97,12 @@ export function updateEndView(data) {
         if (slotEl) slotEl.classList.toggle('hidden', !player);
         var nameEl = document.getElementById('podium-' + place + '-name');
         var scoreEl = document.getElementById('podium-' + place + '-score');
-        if (nameEl) nameEl.textContent = player ? escapeHtml(player.name) : '---';
+        // #2555: textContent already neutralizes markup, so feeding it
+        // escapeHtml() output double-escapes — "Tom & Jerry" rendered as
+        // "Tom &amp; Jerry" in the podium moment, when everyone is looking at
+        // their name. The TV was fixed for exactly this in #1402-B8; the phone
+        // kept the old line. Assign the raw name directly.
+        if (nameEl) nameEl.textContent = player ? player.name : '---';
         if (scoreEl) scoreEl.textContent = player ? player.score : '0';
     });
 
@@ -543,7 +609,7 @@ function renderVisualCard(stats, playlistName) {
         ctx.font = '900 48px Outfit, system-ui, sans-serif';
         ctx.fillText(score, vinylCX, vinylCY - 10);
         ctx.font = '800 14px Inter, system-ui, sans-serif';
-        ctx.fillText('PTS', vinylCX, vinylCY + 26);
+        ctx.fillText(_ptsLabel(), vinylCX, vinylCY + 26);
 
         // Spindle hole (tiny center dot)
         ctx.fillStyle = '#0a0a12';
@@ -668,15 +734,25 @@ function downloadBlob(blob) {
  * @param {Object} data - State data with pause_reason
  */
 export function updatePausedView(data) {
+    var speakerDown = data.pause_reason === 'media_player_error';
     var messageEl = document.getElementById('pause-message');
     if (messageEl) {
         if (data.pause_reason === 'admin_disconnected') {
             messageEl.textContent = utils.t('player.waitingForHostReconnect');
-        } else if (data.pause_reason === 'media_player_error') {
+        } else if (speakerDown) {
             messageEl.textContent = utils.t('player.speakerUnavailable');
         } else {
             messageEl.textContent = utils.t('player.gamePaused');
         }
+    }
+    // #2552: the hint under the spinner was hard-coded to "the game will resume
+    // when the host returns". On a speaker failure the host never left, so the
+    // guest was told to wait for something that was not happening.
+    var hintEl = document.getElementById('pause-hint');
+    if (hintEl) {
+        hintEl.textContent = speakerDown
+            ? utils.t('game.pausedHintSpeaker')
+            : utils.t('game.pausedHint');
     }
 }
 

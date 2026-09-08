@@ -45,12 +45,8 @@ function _t(key, fallback) {
     return fallback;
 }
 
-/** Map the slider value to its human label (mirrors backend banding). */
-export function difficultyLabelFor(v) {
-    if (v <= 33) return _t('admin.library.diffEasy', 'Crowd-pleasers');
-    if (v <= 66) return _t('admin.library.diffBalanced', 'Balanced');
-    return _t('admin.library.diffHard', 'Deep cuts');
-}
+// #2583: `difficultyLabelFor` mapped the slider value to its human label
+// and was exported with no consumer anywhere.
 
 /** The library settings for the start-game payload. */
 export function getLibraryConfig() {
@@ -336,9 +332,12 @@ export function mountLibraryPanel(rootEl, opts = {}) {
                 const data = await resp.json().catch(() => ({}));
                 if (resp.ok && data.saved) {
                     _toast(inst, _t('admin.library.mixSaved', 'Saved as playlist: ') + data.name + ` (${data.songs})`);
-                    // Mine tab lists from the server; nudge a refresh if the
-                    // playlists section is mounted.
-                    if (typeof window.loadPlaylists === 'function') { try { window.loadPlaylists(); } catch (e) { /* optional */ } }
+                    // #2637: a `window.loadPlaylists?.()` nudge stood here,
+                    // meant to refresh the Mine tab. Nothing in www/ has ever
+                    // defined that global, so the guard was always false and the
+                    // call never ran — removed rather than left as a decoy. The
+                    // Mine tab still does not refresh after a save; that gap is
+                    // tracked separately and is not changed here.
                 } else {
                     _toast(inst, data.message || _t('admin.library.mixSaveFailed', 'Could not save mix'));
                 }

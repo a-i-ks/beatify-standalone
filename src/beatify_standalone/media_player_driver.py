@@ -7,10 +7,11 @@ one entity and answers the service calls that result.
 
 **Why the entity claims platform "sonos".**
 
-`MediaPlayerService._play_song` has no generic branch — it dispatches to
-`_play_via_music_assistant`, `_play_via_sonos`, or `_play_via_alexa`, and logs
-"Unsupported platform" for anything else. Of the three, the Sonos path is a
-plain, provider-agnostic call:
+`MediaPlayerService._play_song` has no generic branch — it delegates to
+whichever `PlaybackStrategy` `build_strategy()` picked for the speaker's
+platform (`MusicAssistantStrategy`, `SonosStrategy`, or `AlexaStrategy`; see
+`services/playback/`), and logs "Unsupported platform" when none claims it.
+Of the three, the Sonos strategy makes a plain, provider-agnostic call:
 
     media_player.play_media {entity_id, media_content_id: <uri>, media_content_type: "music"}
 

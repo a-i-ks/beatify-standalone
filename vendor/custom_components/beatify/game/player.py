@@ -5,7 +5,7 @@ from __future__ import annotations
 import time
 import uuid
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from custom_components.beatify.const import MIN_SUBMISSIONS_FOR_SPEED
 
@@ -64,6 +64,12 @@ class PlayerSession:
     # Round results tracking (Issue #120 — Shareable Result Cards)
     round_results: list[str] = field(default_factory=list)
 
+    # Collection mode (Issue #2324, shape E) - CUMULATIVE, NOT reset per round.
+    # One entry per song this player placed close enough to keep: the growing
+    # row the boxed game has and a score does not. Entries are dicts with
+    # title / artist / year / round, appended in state_scoring._append_round_results.
+    collection: list[dict[str, Any]] = field(default_factory=list)
+
     # Betting tracking (Story 5.3)
     bet: bool = False
     bet_outcome: str | None = None  # "won", "lost", or None
@@ -77,6 +83,29 @@ class PlayerSession:
     # Sudden Death tracking (Issue #827) - CUMULATIVE, NOT reset in reset_round()
     eliminated: bool = False  # True once eliminated; stays out for the rest of the game
     eliminated_round: int | None = None  # Round number the player was eliminated in
+    # #2578: im Finale-Stechen sitzen alle Nicht-Fuehrenden eine Runde aus. Das
+    # lief bisher ueber `eliminated`, weil der Scoring-Skip daran haengt — nur
+    # sieht der Fernseher dann sechs Totenkoepfe, obwohl niemand rausgeflogen
+    # ist. Ein eigenes Feld trennt „zaehlt diese Runde nicht" von „ist raus".
+    playoff_spectator: bool = False
+    # #2579: die Runde, in der dieser Spieler zuletzt einen Datenfehler gemeldet
+    # hat. Ein Report je Spieler und Runde reicht — der Knopf sitzt neben der
+    # Aufloesung, und ohne Riegel oeffnet jeder weitere Tipp ein weiteres
+    # oeffentliches Issue.
+    reported_round: int | None = None
+
+    @property
+    def out_of_play(self) -> bool:
+        """Spielt diese Runde nicht mit — egal aus welchem Grund.
+
+        Zwei verschiedene Sachverhalte, die derselben Rechenregel folgen:
+        ``eliminated`` heisst „ist raus und bleibt raus" (Sudden Death, #827),
+        ``playoff_spectator`` heisst „sitzt dieses Stechen aus" (#2578). Fuer
+        die Punktevergabe sind beide gleich; fuer die Anzeige eben nicht, und
+        genau daran ist die alte Loesung gescheitert.
+        """
+        return self.eliminated or self.playoff_spectator
+
     # #1752: round number a late joiner entered the game in. None for LOBBY joins
     # (and after reset_for_new_game). Used to grant a mid-round joiner one grace
     # round — they are excluded from the Sudden Death elimination candidate pool
@@ -257,6 +286,10 @@ class PlayerSession:
         # Reset round results (Issue #120)
         self.round_results = []
 
+        # Reset the collected row (Issue #2324). Game-level like round_results:
+        # reset_round must NOT touch it, or the row would evaporate every round.
+        self.collection = []
+
         # Reset superlative tracking
         self.submission_times = []
         self.bets_placed = 0
@@ -289,6 +322,8 @@ class PlayerSession:
         # Reset Sudden Death state (Issue #827)
         self.eliminated = False
         self.eliminated_round = None
+        self.playoff_spectator = False
+        self.reported_round = None
         # #1752: clear late-join grace tracking so a rematch/new game never
         # grants a carried-over player Sudden Death grace on a stale round number.
         self.joined_round = None

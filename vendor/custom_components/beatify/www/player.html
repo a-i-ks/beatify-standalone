@@ -2,6 +2,7 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
+    <link rel="icon" href="/beatify/static/img/icon-256.png">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
     <!-- #824: cache-bust i18n JSON fetches. See admin.html for rationale. -->
     <meta name="beatify-version" content="{{VERSION}}">
@@ -35,11 +36,30 @@
     <!-- Preconnect for faster font loading (Story 9.8) -->
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@700;900&display=swap" rel="stylesheet">
+    <!-- #2641: the font stylesheet is fetched non-blocking. A cross-origin
+         <link rel=stylesheet> in the head stops rendering until the CDN answers
+         or times out, and on party wifi with no working internet that is 5-30
+         seconds of blank screen before anything appears. media="print" makes
+         the browser fetch it at low priority without blocking the render; the
+         onload swap applies it the moment it arrives. The page is fully
+         readable in the fallback stack until then. -->
+    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@700;900&display=swap" rel="stylesheet" media="print" onload="this.media='all'">
+    <noscript><link href="https://fonts.googleapis.com/css2?family=Outfit:wght@700;900&display=swap" rel="stylesheet"></noscript>
     <!-- Story 18.4: Use minified CSS in production -->
     <link rel="stylesheet" href="/beatify/static/css/styles.min.css?v={{ASSET_VER}}">
-    <!-- Confetti library for celebrations (Story 14.5) -->
-    <script src="https://cdn.jsdelivr.net/npm/canvas-confetti@1.9.2/dist/confetti.browser.min.js"></script>
+    <!-- Confetti library for celebrations (Story 14.5).
+         #2641: `async`, not plain and not `defer`. Loaded synchronously it
+         stopped the parser until jsdelivr answered — on party wifi with flaky
+         internet, 5-30 seconds before the join button existed. `defer` would
+         have been almost as bad: deferred scripts run in document order with
+         the `type="module"` bundle below and hold up DOMContentLoaded, so the
+         page would have rendered and then sat there unwired. `async` blocks
+         neither. Every call site already guards with
+         `typeof confetti === 'undefined'` (player-utils.js, dashboard.js), so
+         a confetti that never arrives costs the celebration animation and
+         nothing else. The service worker passes foreign origins through
+         (sw.js), so this is never served from cache. -->
+    <script async src="https://cdn.jsdelivr.net/npm/canvas-confetti@1.9.2/dist/confetti.browser.min.js"></script>
 </head>
 <body class="theme-dark">
     <header class="player-header">
@@ -112,9 +132,13 @@
             <div class="join-form">
                 <p data-i18n="join.enterName">Enter your name to play</p>
                 <div class="form-group">
+                    <!-- #2627: no maxlength attribute on purpose. The cap is set
+                    from MAX_NAME_LENGTH (the mirror of const.py) in JS, so a
+                    server-side change reaches the field instead of leaving a
+                    stale literal behind. -->
                     <input type="text" id="name-input" class="name-input"
                            data-i18n-placeholder="join.namePlaceholder"
-                           placeholder="Your name" maxlength="20"
+                           placeholder="Your name"
                            autocomplete="off" autocapitalize="words"
                            aria-describedby="name-validation-msg">
                     <p id="name-validation-msg" class="validation-msg hidden"></p>
@@ -131,7 +155,8 @@
                         <span>
                             <span data-i18n="onboarding.stepLabel">Step</span>
                             <span id="tour-step-num">1</span>
-                            <span class="of" data-i18n="onboarding.stepOf">of 4</span>
+                            <span class="of" data-i18n="onboarding.stepOf">of</span>
+                            <span id="tour-step-total">5</span>
                         </span>
                         <button type="button" id="tour-skip-link" class="tour-skip-link" data-i18n="onboarding.skip">Skip tour</button>
                     </div>
@@ -434,6 +459,14 @@
                         <span data-i18n="game.introRound">INTRO ROUND</span>
                     </span>
                     <span id="last-round-banner" class="arc-chip arc-chip--final hidden" data-i18n="game.finalRound">Final Round!</span>
+                    <!-- #2554: the host can stop the song mid-round. Until now
+                         only the host's own button changed; to everyone else the
+                         music just cut out while the timer kept running, which
+                         reads as a failure. -->
+                    <span id="song-stopped-chip" class="arc-chip arc-chip--stopped hidden">
+                        <span aria-hidden="true">⏹</span>
+                        <span data-i18n="game.songStoppedChip">Song stopped — keep guessing</span>
+                    </span>
                 </div>
 
                 <!-- Year XXL display — turns green + gets "locked" class after submit -->
@@ -468,12 +501,23 @@
                         <button type="button" id="year-decrement-5" class="slider-btn-year slider-btn-year--coarse" aria-label="Decrease year by 5">&minus;5</button>
                         <button type="button" id="year-decrement" class="slider-btn-year" aria-label="Decrease year">&minus;</button>
                         <div class="slider-arcade-track">
+                            <!-- #2337: these are the fallback bounds only.
+                                 applyYearRange() replaces them from the
+                                 server's year_range on the first state
+                                 update, so a playlist reaching past them is
+                                 still answerable. -->
                             <input type="range"
                                    id="year-slider"
                                    min="1950"
                                    max="2025"
                                    value="1990"
                                    class="year-slider year-slider-arcade">
+                            <!-- #2344: decade marks, built by renderYearScale()
+                                 from the same span applyYearRange() applies.
+                                 Empty here on purpose — pinning them to fixed
+                                 percentages would go wrong the moment the
+                                 bounds move, which they now do. -->
+                            <div id="year-scale" class="year-scale" aria-hidden="true"></div>
                         </div>
                         <button type="button" id="year-increment" class="slider-btn-year" aria-label="Increase year">+</button>
                         <button type="button" id="year-increment-5" class="slider-btn-year slider-btn-year--coarse" aria-label="Increase year by 5">+5</button>
@@ -627,7 +671,10 @@
                      ended with zero guesses and the game is holding here. -->
                 <div id="reveal-idle-halt" class="idle-halt-banner hidden" role="status">
                     <span class="idle-halt-icon" aria-hidden="true">⏸️</span>
-                    <span data-i18n="reveal.idleHaltBanner">Game idle — no one played this round. Tap Next round to keep going.</span>
+                    <!-- #2622: the sentence swaps for guests (renderIdleHalt in
+                         player-reveal.js) — "Tap Next round" points at a button
+                         that only the host has. -->
+                    <span id="reveal-idle-halt-text" data-i18n="reveal.idleHaltBanner">Game idle — no one played this round. Tap Next round to keep going.</span>
                 </div>
 
                 <!-- Header: round count + difficulty badge + round-stats ⓘ -->
@@ -719,6 +766,25 @@
                     </div>
                 </div>
 
+                <!-- Streak shield (#1666, rewired #2601): the line that says why
+                     a zero-point round left the streak standing. Under the score
+                     row because that is where the question arises. -->
+                <div id="reveal-streak-shield" class="streak-shield-used hidden" role="status"></div>
+
+                <!-- Your collection (#2324): every song you placed close
+                     enough to keep, oldest year first. The row a score cannot
+                     be — it is still there when the game is over. -->
+                <section id="collection-section" class="card-section collection-section hidden">
+                    <h2 class="section-header">
+                        <span class="section-icon" aria-hidden="true">🗂️</span>
+                        <span data-i18n="reveal.collection.title">Your collection</span>
+                        <span id="collection-count" class="collection-count"></span>
+                    </h2>
+                    <div class="section-content-padded">
+                        <div id="collection-row" class="collection-row" role="list"></div>
+                    </div>
+                </section>
+
                 <!-- Title & Artist Reveal + Voting (#1180) -->
                 <section id="ta-reveal-section" class="card-section ta-reveal-section hidden">
                     <h2 class="section-header">
@@ -761,6 +827,9 @@
                         <div id="song-rich-info" class="song-rich-info">
                             <!-- Populated by JavaScript: chart info, certifications, awards -->
                         </div>
+                        <!-- #2588: steht VOR dem Fun Fact — die Erklaerung muss
+                             vor dem Widerspruch kommen, nicht danach. -->
+                        <div id="cover-hint" class="cover-hint hidden"></div>
                         <div id="fun-fact" class="fun-fact-text"></div>
                     </div>
                 </section>
@@ -815,7 +884,19 @@
                 <div class="paused-spinner">
                     <div class="spinner"></div>
                 </div>
-                <p class="paused-hint" data-i18n="game.pausedHint">The game will resume when the host returns</p>
+                <p id="pause-hint" class="paused-hint" data-i18n="game.pausedHint">The game will resume when the host returns</p>
+                <!-- #2551: the host playing along on their phone used to have no
+                     way out of PAUSED. resume_game and end_game both accept it
+                     server-side; the controls only ever existed on /beatify/admin,
+                     and nothing on this screen linked there. -->
+                <div id="paused-admin-actions" class="paused-admin-actions hidden">
+                    <button id="paused-resume-btn" class="btn btn-primary btn-large btn-full-width" type="button">
+                        <span class="btn-icon" aria-hidden="true">▶</span>
+                        <span data-i18n="admin.resumeGame">Resume Game</span>
+                    </button>
+                    <button id="paused-end-btn" class="btn btn-secondary btn-full-width" type="button" data-i18n="admin.endGame">End Game</button>
+                    <a class="paused-admin-link" href="/beatify/admin" data-i18n="admin.openAdminPage">Open the admin page</a>
+                </div>
             </div>
         </div>
 
@@ -931,6 +1012,8 @@
                 <span class="control-icon">🔉</span>
                 <span class="control-label" data-i18n="admin.volDown">Down</span>
             </button>
+            <!-- #2557: the actual level, so the host is not adjusting blind. -->
+            <span id="volume-readout" class="control-volume-readout" aria-live="polite">--</span>
             <button id="volume-up-btn" class="control-btn" type="button">
                 <span class="control-icon">🔊</span>
                 <span class="control-label" data-i18n="admin.volUp">Up</span>

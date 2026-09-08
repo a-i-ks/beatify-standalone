@@ -32,6 +32,19 @@ MAX_CONSECUTIVE_PLAYBACK_FAILURES = 3
 # and should still be the thing that ends the round.
 ROUND_SUPERVISOR_INTERVAL_SECONDS = 2
 ROUND_OVERDUE_GRACE_SECONDS = 2.0
+# #1012 / #2626: the auto-advance delays a host can pick at the reveal, in
+# seconds; 0 means "off" (advance manually or when the song ends). This tuple is
+# the ONLY list of allowed values: server/game_views.py validates against it and
+# www/js/game-constants.js mirrors it (guarded by
+# www/js/__tests__/game-constants-mirror.test.js), so both the wizard chips and
+# the admin chips are rendered from it. Before that, three hand-kept lists could
+# disagree and a chip the UI showed as selected silently became "off".
+REVEAL_AUTO_ADVANCE_OPTIONS: tuple[int, ...] = (0, 30, 60, 90)
+
+# #2627: the one place the player-name cap is defined. game/player_registry.py
+# enforces it, and www/js/game-constants.js mirrors it for the join forms
+# (guarded by www/js/__tests__/game-constants-mirror.test.js) so the client
+# never disables a Join button for a name the server would have accepted.
 MAX_NAME_LENGTH = 20
 MIN_NAME_LENGTH = 1
 LOBBY_DISCONNECT_GRACE_PERIOD = 5  # seconds before removing disconnected player
@@ -93,7 +106,9 @@ TITLE_ARTIST_VOTE_WINDOW_SECONDS = 30
 
 # Intro mode constants (Issue #23)
 INTRO_DURATION_SECONDS = 15
-INTRO_ROUND_CHANCE = 0.20  # 20% chance per round
+# #2583: INTRO_ROUND_CHANCE lived here and was never read — the per-round
+# probability is `_INTRO_PROBABILITY` in game/round_manager.py. Two homes
+# for one number meant either could drift without anyone noticing.
 INTRO_BONUS_TIERS: list[int] = [5, 3, 1]  # Same as movie bonus
 MIN_INTRO_BONUSES_FOR_AWARD = 1  # Minimum to qualify for superlative
 
@@ -105,10 +120,26 @@ DIFFICULTY_NORMAL = "normal"
 DIFFICULTY_HARD = "hard"
 DIFFICULTY_DEFAULT = DIFFICULTY_NORMAL
 
+# Points for the two tiers that do not depend on difficulty. They used to live
+# in game/scoring.py, one import away from the table they belong to; #2625
+# brought them here so the whole year-guess payout is readable in one place —
+# and so the frontend mirror in www/js/game-constants.js has a single file to
+# be checked against.
+POINTS_EXACT = 10
+POINTS_WRONG = 0
+
 # Scoring config per difficulty level (Story 14.1)
 # close_range/close_points: years off and points for "close" tier
 # near_range/near_points: years off and points for "near" tier
-# Exact match always awards 10 points (POINTS_EXACT)
+# A near_range of 0 means the level has no near tier at all — everything
+# outside close_range scores POINTS_WRONG.
+# Exact match always awards POINTS_EXACT.
+#
+# #2625: the difficulty hints the wizard and the admin panel show are BUILT
+# from these numbers (www/js/game-constants.js + the {placeholder} templates in
+# www/i18n/*.json), not written out again as prose. The admin hint had already
+# drifted — it promised "only close guesses score" where the wizard promised
+# the concrete "3 pts within ±2 years".
 DIFFICULTY_SCORING: dict[str, dict[str, int]] = {
     DIFFICULTY_EASY: {
         "close_range": 7,
@@ -142,7 +173,15 @@ ERR_ROUND_EXPIRED = "ROUND_EXPIRED"
 ERR_ALREADY_SUBMITTED = "ALREADY_SUBMITTED"
 ERR_NOT_IN_GAME = "NOT_IN_GAME"
 ERR_MEDIA_PLAYER_UNAVAILABLE = "MEDIA_PLAYER_UNAVAILABLE"
+# #2294: the two create-game rejections a host can actually act on. They used to
+# share INVALID_REQUEST with ten unrelated ones, which the client renders as a
+# single generic sentence — "this request was invalid, check your setup".
+ERR_NO_PLAYLISTS_SELECTED = "NO_PLAYLISTS_SELECTED"
+ERR_NO_PLAYABLE_SONGS = "NO_PLAYABLE_SONGS"
 ERR_INVALID_ACTION = "INVALID_ACTION"
+# #2336: a handler raised. Distinct from INVALID_ACTION, which means "the
+# server understood you and said no" — this one means the server broke.
+ERR_INTERNAL = "INTERNAL_ERROR"
 ERR_GAME_FULL = "GAME_FULL"
 ERR_NO_SONGS_REMAINING = "NO_SONGS_REMAINING"
 ERR_SESSION_NOT_FOUND = "SESSION_NOT_FOUND"  # Story 11.2
@@ -234,6 +273,14 @@ URI_PATTERN_YOUTUBE_MUSIC = r"^https://music\.youtube\.com/watch\?v=[a-zA-Z0-9_-
 URI_PATTERN_TIDAL = r"^tidal://track/\d+$"
 URI_PATTERN_DEEZER = r"^deezer://track/\d+$"
 URI_PATTERN_MA_LIBRARY = r"^[a-z0-9_]+(--[^:]+)?://track/.+$"
+# #2426: sproft/music-assistant-ytmusic registers as `ytmusic_free` and streams
+# YouTube Music without a Premium account. Its track item_id IS the YouTube
+# video id (`_encode_track_id` in the provider returns it unchanged unless a
+# trim window is set), so Beatify derives the URI from the `uri_youtube_music`
+# the catalogue already carries rather than storing a second copy of the same
+# id. `multi_instance` is true for that provider, hence the optional
+# `--<suffix>` on the instance name.
+URI_PATTERN_YTMUSIC_FREE = r"^ytmusic_free(--[^:]+)?://track/[a-zA-Z0-9_-]{11}$"
 
 # Provider identifiers (Story 17.1)
 PROVIDER_SPOTIFY = "spotify"
@@ -243,4 +290,5 @@ PROVIDER_TIDAL = "tidal"
 PROVIDER_DEEZER = "deezer"
 PROVIDER_MA_LIBRARY = "ma_library"
 PROVIDER_AMAZON_MUSIC = "amazon_music"
+PROVIDER_YTMUSIC_FREE = "ytmusic_free"  # #2426, third-party MA provider
 PROVIDER_DEFAULT = PROVIDER_SPOTIFY

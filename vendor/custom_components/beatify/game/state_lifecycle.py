@@ -22,11 +22,11 @@ unchanged.
   storefront skips vs. systemic playback failures per #808 / #949), builds the
   round metadata, commits the round state, flips the lights and fires the
   round-start TTS announcements (#471 / #841 / #842). The single entry point
-  every "advance to the next round" caller (``ws_handlers``, ``game_views``,
-  ``GameService``) hits.
-* ``_ensure_media_player_service`` — lazily constructs the
-  :class:`MediaPlayerService` on the first round (and wires analytics for
-  error recording, Story 19.1) so the service is only created once a media
+  every "advance to the next round" caller (``ws_handlers``, ``game_views``)
+  hits.
+* ``_ensure_media_player_service`` — lazily builds the media-player service on
+  the first round via the injected factory (#2638) and wires analytics for
+  error recording (Story 19.1), so the service is only created once a media
   player is configured.
 * ``_prepare_intro_round`` — thin pass-through to
   ``RoundManager.prepare_intro_round`` (intro-splash deferral decision).
@@ -62,6 +62,8 @@ The mixin relies on attributes / methods the host class owns and that live on
   ``self.media_player`` — URI resolution and media-player dispatch context.
 * ``self._media_player_service`` / ``self._stats_service`` — lazily-built
   playback service + the analytics sink wired into it.
+* ``self._service_factories`` — the #2638 injection bundle; supplies the
+  media-player factory ``_ensure_media_player_service`` calls.
 * ``self._round_manager`` — the :class:`RoundManager` the intro/metadata/commit
   helpers delegate to; also supplies ``_timer_countdown`` / ``_on_round_end``
   callbacks.
@@ -85,8 +87,9 @@ The mixin relies on attributes / methods the host class owns and that live on
 
 It carries no state of its own. ``GamePhase`` is imported lazily inside the
 methods that need it (``# noqa: PLC0415``) to avoid a top-level circular import
-back into ``state.py``; ``MediaPlayerService`` is likewise imported lazily
-inside ``_ensure_media_player_service`` (matching the original).
+back into ``state.py``. The concrete ``MediaPlayerService`` is no longer
+imported here at all (#2638) — ``_ensure_media_player_service`` calls the
+injected factory, so the import graph stays acyclic without a lazy import.
 """
 
 from __future__ import annotations
@@ -134,17 +137,29 @@ class RoundLifecycleMixin:
 
         self._set_phase(GamePhase.PLAYING)
 
-        # Issue #1665: hand every player their single sabotage token. Unlike the
-        # steal (unlocked by a streak), the sabotage token exists from round 1 —
-        # a token you have to earn first would rarely be spent in a short game.
-        # No-op when the setting is off, so default games are unchanged.
-        if self.sabotage_enabled:
-            for player in self.players.values():
-                player.unlock_sabotage()
+        self._grant_sabotage_tokens()
 
         # Round and song selection will be implemented in Epic 4
         _LOGGER.info("Game started: %d players", len(self.players))
         return True, None
+
+    def _grant_sabotage_tokens(self) -> None:
+        """Hand every player their single sabotage token (#1665).
+
+        Unlike the steal (unlocked by a streak), the sabotage token exists from
+        round 1 — a token you have to earn first would rarely be spent in a
+        short game. No-op when the setting is off, so default games are
+        unchanged, and idempotent, so being called twice cannot hand out two.
+
+        #2497: this used to live inline in ``start_game()``, which no
+        production path calls — both real start paths go straight to
+        ``start_round()``. It is called from the LOBBY transition there as well
+        now, and lives in its own method so the two callers cannot drift.
+        """
+        if not self.sabotage_enabled:
+            return
+        for player in self.players.values():
+            player.unlock_sabotage()
 
     def _get_round_start_lock(self) -> asyncio.Lock:
         """Get (lazily creating) the #1697 round-start serialization lock.
@@ -227,6 +242,16 @@ class RoundLifecycleMixin:
         # that view entirely — hooking the view fixed one path and left the
         # other broken. Fires once; a hook failure must never block a game, so
         # the worst case is the room keeping its creation-time songs.
+        # #2497: the sabotage grant belongs to the LOBBY -> first-round
+        # transition, and this is the only place both start paths pass through.
+        # It used to sit in start_game(), which nothing in production calls: the
+        # websocket admin handler and the REST start view both call start_round()
+        # directly and the phase flip happens inside _initialize_round. Same
+        # reasoning as the pre-start hook below, which is here for exactly that
+        # reason.
+        if self.phase == GamePhase.LOBBY and _retry_count == 0:
+            self._grant_sabotage_tokens()
+
         hook = getattr(self, "pre_start_hook", None)
         if hook is not None and self.phase == GamePhase.LOBBY and _retry_count == 0:
             self.pre_start_hook = None
@@ -289,7 +314,24 @@ class RoundLifecycleMixin:
                 return False
             return await self._start_round_locked(_retry_count + 1)
 
-        self.last_round = self._playlist_manager.get_remaining_count() <= 1
+        # #2421: one rule decides whether this is the last round, and it lives
+        # here. The flag counts what is left in the pool; the TTS announcement
+        # used to re-derive the same question from `round >= total_rounds`, and
+        # the two disagree as soon as a song is dropped mid-game — the
+        # playback-failure path below marks a song played without a round being
+        # committed, so `round` falls behind while the remaining count keeps
+        # pace with reality. Measured on a five-song game with one song
+        # dropped: round 4 really is the last, the flag said so, and the spoken
+        # cue never came.
+        #
+        # The `total_rounds > 1` guard moved here from the announcement. It is
+        # the reason a one-song game no longer raises the flag at all: opening
+        # a game with "final round!" is noise, and that judgement now applies
+        # to the banner and the announcement alike instead of only to the one
+        # that happened to carry the guard.
+        self.last_round = (
+            self.total_rounds > 1 and self._playlist_manager.get_remaining_count() <= 1
+        )
         self._ensure_media_player_service()
         will_defer_for_splash = self._prepare_intro_round(song)
 
@@ -346,7 +388,7 @@ class RoundLifecycleMixin:
                 _LOGGER.info(
                     "Round %s: waiting %.1fs for the speaker to finish announcing "
                     "before starting playback",
-                    getattr(self, "current_round", "?"),
+                    getattr(self, "round", "?"),
                     busy,
                 )
                 await asyncio.sleep(busy)
@@ -533,7 +575,10 @@ class RoundLifecycleMixin:
         await self.announce_round_start()
         await self.announce_countdown()
         # Issue #841 Phase 3: flag the final round (use case 17).
-        if self.total_rounds > 1 and self.round >= self.total_rounds:
+        # #2421: read the flag rather than re-deriving the condition, so the
+        # speaker, the banner, the admin's button and the Finale Double guard
+        # all answer to the same rule.
+        if self.last_round:
             await self.announce_last_round()
         # Issue #842 Phase 4: flag an intro-mode round (use case 21).
         if self.is_intro_round:
@@ -559,10 +604,26 @@ class RoundLifecycleMixin:
             # The song is (or is about to be) audible: start the round clock
             # from here rather than from initialize_round, so players get the
             # full round duration of MUSIC.
+            # #2543: on an intro-splash round the clock belongs to
+            # confirm_intro_splash — the song has not played yet, so there is
+            # nothing to start here and the "clock started" log would lie.
             start_now = getattr(self._round_manager, "start_timer_at_playback", None)
-            if callable(start_now):
+            if callable(start_now) and not will_defer_for_splash:
                 with contextlib.suppress(Exception):
-                    start_now(self._timer_countdown)
+                    # #2546: hand the remaining announcement budget along. The
+                    # announce_* calls above queue their phrases (see
+                    # _tts_announce) instead of blocking until the speaker is
+                    # free, so "the song is audible" is not yet true when we get
+                    # here. announcement_busy_seconds() is what the queue itself
+                    # believes is left, and _tts_pre_round_delay is the user's
+                    # manual #1211 allowance for device overhead we cannot see.
+                    _extra = 0.0
+                    with contextlib.suppress(Exception):
+                        busy = getattr(self, "announcement_busy_seconds", None)
+                        if callable(busy):
+                            _extra += max(0.0, float(busy()))
+                    _extra += max(0.0, float(self._tts_pre_round_delay or 0.0))
+                    start_now(self._timer_countdown, _extra)
                     _LOGGER.info(
                         "Round %s: clock started at playback (%.0fs of music)",
                         getattr(self, "round", "?"),
@@ -627,6 +688,30 @@ class RoundLifecycleMixin:
                         pass
                 for tick in range(20):
                     await _asyncio.sleep(1.0)
+                    # #2576: der Wachhund darf nur wiederbeleben, was von allein
+                    # stehengeblieben ist — nie etwas, das jemand absichtlich
+                    # angehalten hat.
+                    #
+                    # Ohne diese Pruefung liest er zwei gewollte Zustaende als
+                    # Haenger: der Host tippt „Song stoppen" (media_stop laesst
+                    # einen MA-Player als `idle` MIT Titel zurueck — genau die
+                    # Signatur, die weiter unten als steckengeblieben gilt), und
+                    # das Spiel pausiert (pause_game stoppt den Lautsprecher).
+                    # In beiden Faellen startete er die Musik wieder: einmal
+                    # gegen den ausdruecklichen Wunsch des Gastgebers, einmal
+                    # unter dem Pause-Banner.
+                    from .state import GamePhase  # noqa: PLC0415 — Zirkelbezug
+
+                    if self.phase != GamePhase.PLAYING or getattr(
+                        self, "song_stopped", False
+                    ):
+                        _LOGGER.info(
+                            "Resume watchdog: phase=%s song_stopped=%s — exit "
+                            "(playback stopped on purpose)",
+                            self.phase,
+                            getattr(self, "song_stopped", None),
+                        )
+                        return
                     st = self._hass.states.get(self.media_player)
                     if st is None:
                         _LOGGER.info("Resume watchdog: entity vanished — exit")
@@ -773,22 +858,25 @@ class RoundLifecycleMixin:
         return True
 
     def _ensure_media_player_service(self) -> None:
-        """Create MediaPlayerService lazily on first round.
+        """Create the media-player service lazily on first round.
 
         Idempotent: if the service was already built (e.g. by the #1540 LOBBY
         pre-warm — see :meth:`prewarm_media_player_service`), the
         ``not self._media_player_service`` guard makes this a no-op, so the
         round path keeps working unchanged whether or not the pre-warm ran.
+
+        #2638: the concrete class is no longer named here. The injected
+        ``media_player`` factory builds it; with no factory wired (a game-logic
+        unit test) the game simply has no speaker, which every caller of
+        ``self._media_player_service`` already guards for.
         """
-        # Lazy import: only the concrete class for instantiation; type hints
-        # use MediaPlayerProtocol (module-level) to keep the import graph acyclic.
-        from custom_components.beatify.services.media_player import (
-            MediaPlayerService,
-        )
+        factory = self._service_factories.media_player
+        if factory is None:
+            _LOGGER.debug("No media-player factory wired — playback unavailable")
+            return
 
         if self.media_player and not self._media_player_service:
-            self._media_player_service = MediaPlayerService(
-                self._hass,
+            self._media_player_service = factory(
                 self.media_player,
                 platform=self.platform,
                 provider=self.provider,

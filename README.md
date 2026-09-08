@@ -23,13 +23,13 @@ the Spotify Web API.
 
 ## Why a shim instead of a fork
 
-Measured against upstream `v4.3.0`:
+Measured against upstream `v4.4.3`:
 
 | | |
 |---|---|
-| Python in upstream | 67,328 LOC across 185 files |
-| Files touching `homeassistant` | 41 |
-| LOC in Home-Assistant-free files | 44,635 (66 %) |
+| Python in upstream | 75,283 LOC across 238 files |
+| Files touching `homeassistant` | 36 |
+| LOC in Home-Assistant-free files | 56,290 (75 %) |
 | Distinct `homeassistant` imports | 25 |
 | HA services called | 15 |
 
@@ -64,7 +64,7 @@ build if a version bump reaches for anything the shim does not provide.
    └───────────────────────────────────────────┘
 ```
 
-All 54 bundled playlists carry `spotify:track:` URIs, which is what makes
+All 66 bundled playlists carry `spotify:track:` URIs, which is what makes
 dropping Music Assistant possible at all.
 
 **Deliberately not supported:** Sonos/Alexa, Apple Music, Tidal, Deezer, YouTube
@@ -72,19 +72,21 @@ Music, local libraries, party lights, HA cloud TTS. Requires **Spotify Premium**
 
 ### The one assumption about upstream internals
 
-`MediaPlayerService._play_song` has no generic branch — it dispatches only to
-`_play_via_music_assistant`, `_play_via_sonos` or `_play_via_alexa`. The Sonos
-path is the narrowest one that reaches a plain, provider-agnostic
-`media_player.play_media` call, so the synthetic entity registers itself with
-`platform = "sonos"`. `tools/check_ha_surface.py --seams-only` asserts this
-still holds on every bump.
+`MediaPlayerService._play_song` has no generic branch — it delegates to whichever
+`PlaybackStrategy` `build_strategy()` picked for the speaker's platform (Music
+Assistant, Sonos or Alexa; upstream v4.4.3 moved this from an
+`if self._platform ==` chain into one strategy class per platform, see
+`services/playback/`). `SonosStrategy` is the narrowest one that reaches a
+plain, provider-agnostic `media_player.play_media` call, so the synthetic
+entity registers itself with `platform = "sonos"`.
+`tools/check_ha_surface.py --seams-only` asserts this still holds on every bump.
 
 ## Status
 
 Running **on real hardware**: a Raspberry Pi 4B in a Retroflag NESPi 4 case,
 Batocera 43.1. Upstream boots against the shim, discovers the Spotify player,
 serves its pages, and go-librespot advertises itself on the LAN as a Spotify
-Connect device. 143 tests green, on the desktop and on the Pi.
+Connect device. 227 tests green, on the desktop and on the Pi.
 
 Everything measured on that box — including three bugs only hardware found — is
 written up in [docs/HARDWARE-FINDINGS.md](docs/HARDWARE-FINDINGS.md) so a rebuild
@@ -165,7 +167,7 @@ step. Point Batocera at it via `wifi.ssid` / `wifi.key` in
 ## Updating upstream
 
 ```sh
-python3 tools/check_ha_surface.py --tag v4.4.0    # does the shim still cover it?
+python3 tools/check_ha_surface.py --tag v4.5.0-rc1  # does the shim still cover it?
 ```
 
 Only if that passes: replace `vendor/custom_components/beatify/` with the new
@@ -177,7 +179,7 @@ the exact list of shim work the bump requires.
 ```sh
 python3 -m venv .venv
 .venv/bin/pip install -r requirements-dev.txt
-.venv/bin/python -m pytest            # 139 tests
+.venv/bin/python -m pytest            # 227 tests
 .venv/bin/python tools/check_ha_surface.py
 .venv/bin/python bin/beatify-standalone --data-dir ./data --port 8123
 ```

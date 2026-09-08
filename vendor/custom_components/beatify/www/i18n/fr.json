@@ -28,7 +28,7 @@
     "leaveGame": "Quitter",
     "welcomeBack": "Bon retour, {name} !",
     "waitingForHostReconnect": "En attente de l'hôte...",
-    "speakerUnavailable": "Enceinte indisponible. Vérifiez votre lecteur multimédia.",
+    "speakerUnavailable": "L'enceinte ne répond pas — l'hôte s'en occupe.",
     "gamePaused": "Jeu en pause. Veuillez patienter...",
     "redirecting": "Redirection...",
     "hostCannotLeave": "L'hôte ne peut pas quitter. Terminez le jeu d'abord."
@@ -68,6 +68,7 @@
     "players": "joueurs"
   },
   "game": {
+    "yearLabel": "Année",
     "introSplashTitle": "Manche Intro !",
     "introSplashDesc": "Arrête la chanson dès que tu la reconnais !",
     "introSplashWaiting": "En attente de l'hôte...",
@@ -101,6 +102,10 @@
     "paused": "Partie en pause",
     "waitingForHost": "En attente de la reconnexion de l'hôte...",
     "pausedHint": "La partie reprendra quand l'hôte reviendra",
+    "pausedHintSpeaker": "La partie reprend dès que le son revient",
+    "pausedSpeaker": "L'enceinte ne répond pas — l'hôte s'en occupe",
+    "pausedNoSongs": "Plus aucun morceau disponible",
+    "songStoppedChip": "Morceau arrêté — continuez à deviner",
     "difficultyEasy": "Facile",
     "difficultyNormal": "Normal",
     "difficultyHard": "Difficile",
@@ -177,7 +182,12 @@
     "wrong": "Raté",
     "theYearWas": "L'année était",
     "idleHaltBanner": "Jeu en pause — personne n'a joué ce tour. Appuie sur « Tour suivant » pour continuer.",
+    "idleHaltBannerGuest": "Jeu en pause — personne n'a joué ce tour. L'hôte lancera le tour suivant.",
     "funFact": "Le saviez-vous",
+    "collection": {
+      "title": "Ta collection",
+      "count": "{count} gardées"
+    },
     "yourGuess": "Ta réponse",
     "correctYear": "Année correcte",
     "accuracy": "Précision",
@@ -313,6 +323,13 @@
     "chartBillboard": "Billboard Hot 100",
     "chartGerman": "Charts allemands",
     "chartUK": "Charts du Royaume-Uni",
+    "chartEurovision": "Eurovision",
+    "pointsShort": "pts",
+    "chartAustria": "Charts autrichiens",
+    "chartSwitzerland": "Charts suisses",
+    "chartItaly": "Charts italiens",
+    "chartFrance": "Charts français",
+    "chartSpain": "Charts espagnols",
     "weeksOnChart": "semaines au classement",
     "weeksShort": "sem",
     "moreAwards": "plus",
@@ -323,9 +340,12 @@
     "streakShieldHeld": "Bouclier de série prêt",
     "fixYearBtn": "🎯 Mauvaise année ? Corriger",
     "flagYearBtn": "🚩 Mauvaise année ? Prévenir l'hôte",
-    "flaggedForHost": "✓ Signalé à l'hôte"
+    "flaggedForHost": "✓ Signalé à l'hôte",
+    "finalePlayoff": "Finale",
+    "coverHint": "Reprise — {year} était l'original ; la réponse est la version que vous venez d'entendre."
   },
   "leaderboard": {
+    "leader": "en tête",
     "title": "Classement",
     "standings": "Positions",
     "finalTitle": "Résultats finaux",
@@ -339,12 +359,14 @@
     "thanksForPlaying": "Merci d'avoir joué à Beatify",
     "thanksEmoji": "Merci d'avoir joué !",
     "waitForHost": "Attends que l'hôte lance une nouvelle partie",
+    "rejoinHint": "Scanne à nouveau le code QR pour rejoindre la prochaine partie.",
     "bestStreak": "Meilleure série",
     "roundsPlayed": "Manches jouées",
     "betsWon": "Paris gagnés",
     "fullRankings": "Classement complet"
   },
   "admin": {
+    "alreadyJoined": "Tu participes déjà en tant que {name}",
     "title": "Beatify Admin",
     "filterAll": "Tous",
     "skipRound": "Passer",
@@ -378,6 +400,8 @@
     "startGame": "Lancer la partie",
     "createGame": "Créer une partie",
     "endGame": "Terminer la partie",
+    "resumeGame": "Reprendre la partie",
+    "openAdminPage": "Ouvrir la page admin",
     "volDown": "Baisser",
     "volUp": "Monter",
     "importPlaylist": "Importer une playlist Spotify",
@@ -450,9 +474,6 @@
     "difficultyEasy": "Facile",
     "difficultyNormal": "Normal",
     "difficultyHard": "Difficile",
-    "difficultyEasyDesc": "Score indulgent : Devinez dans les 7 ans pour marquer. Exact = 10 pts, dans les 7 ans = 5 pts, dans les 10 ans = 1 pt.",
-    "difficultyNormalDesc": "Score standard : Devinez dans les 3 ans pour marquer. Exact = 10 pts, dans les 3 ans = 5 pts, dans les 5 ans = 1 pt.",
-    "difficultyHardDesc": "Score exigeant : Seules les réponses proches comptent. Exact = 10 pts, dans les 2 ans = 3 pts, sinon pas de points.",
     "selectProvider": "Fournisseur de musique",
     "providerSpotify": "Spotify",
     "viewAnalytics": "Statistiques",
@@ -484,7 +505,6 @@
     "revealAdvance": "Avance auto",
     "revealAdvanceOff": "Désactivé",
     "revealAdvanceHint": "Après la révélation, la manche suivante démarre seule — après un temps fixe, ou (Désactivé) quand la chanson se termine. Le jeu avance sans personne devant l'écran d'administration.",
-    "difficultyHint": "Facile : large tolérance (±7 ans). Normal : moyenne (±3 ans). Difficile : seules les réponses proches comptent.",
     "artistChallengeHint": "Après chaque manche, les joueurs peuvent deviner l'artiste pour des points bonus. Première bonne réponse : +5 points.",
     "movieQuiz": "Bonus Quiz Film",
     "movieQuizHint": "Pour les chansons de bandes originales, les joueurs devinent le film pour des points bonus échelonnés. Ne se déclenche que sur les chansons avec métadonnées de film.",
@@ -634,7 +654,10 @@
       "needPlayerToStart": "Rejoins la partie (ou demande à un invité de scanner le QR) avant de commencer.",
       "wsReconnecting": "Reconnexion au serveur de jeu — réessaie.",
       "waitingForGuests": "En attente des invités…",
-      "libraryPlaylistLabel": "votre bibliothèque"
+      "libraryPlaylistLabel": "votre bibliothèque",
+      "noPlaylist": "aucune playlist",
+      "playlistCount": "{count} playlists",
+      "noSpeaker": "aucune enceinte"
     },
     "startRematchFailed": "Échec du lancement de la revanche",
     "startGameplayFailed": "Échec du lancement de la partie",
@@ -861,6 +884,9 @@
     "pagination": "Page {current} sur {total}"
   },
   "dashboard": {
+    "nowPlaying": "Lecture en cours",
+    "reveal": "Révélation",
+    "nowRevealing": "Révélation en cours",
     "autoAdvance": "Suite auto",
     "title": "Beatify - Tableau de bord",
     "connecting": "Connexion à la partie...",
@@ -1045,6 +1071,20 @@
     "RATE_LIMITED": "Trop de requêtes — patiente une minute et réessaye.",
     "RECONNECTING": "Reconnexion...",
     "ROUND_EXPIRED": "La manche a expiré",
+    "FROZEN": "Gelé — patiente",
+    "ELIMINATED": "Tu es éliminé",
+    "NO_STEAL_AVAILABLE": "Aucun vol disponible",
+    "CANNOT_STEAL_SELF": "Impossible de te voler toi-même",
+    "NO_SABOTAGE_AVAILABLE": "Aucun sabotage disponible",
+    "CANNOT_SABOTAGE_SELF": "Impossible de te saboter toi-même",
+    "TARGET_NOT_SUBMITTED": "Il n'a pas encore répondu",
+    "TARGET_ALREADY_SUBMITTED": "Il a déjà validé",
+    "NO_ARTIST_CHALLENGE": "Aucun défi artiste en cours",
+    "NO_MOVIE_CHALLENGE": "Aucun défi film en cours",
+    "NO_TITLE_ARTIST_CHALLENGE": "Rien à deviner pour l'instant",
+    "INTERNAL_ERROR": "Un problème est survenu",
+    "nameEmpty": "Saisis un nom",
+    "nameTooLong": "Nom trop long ({max} caractères max)",
     "SAVE_FAILED": "Impossible d'enregistrer le mix. Réessaie.",
     "SESSION_NOT_FOUND": "Session expirée",
     "SESSION_TAKEOVER": "Session reprise par un autre onglet",
@@ -1071,7 +1111,10 @@
     "PROVIDER_NOT_SUPPORTED": "{speaker} ne peut pas lire {provider}. Passe a une enceinte Music Assistant.",
     "UNSUPPORTED_PLAYER": "{speaker} n'est pas un type d'enceinte pris en charge. Utilise Music Assistant.",
     "joinTimeout": "Connexion impossible. Reessaie.",
-    "INVALID_REQUEST": "Requête invalide. Vérifiez votre configuration et réessayez."
+    "INVALID_REQUEST": "Requête invalide. Vérifiez votre configuration et réessayez.",
+    "NO_PLAYLISTS_SELECTED": "Choisissez au moins une playlist avant de lancer une partie.",
+    "NO_PLAYABLE_SONGS": "Aucun des titres des playlists sélectionnées ne peut être lu avec ce service musical. Essayez une autre playlist ou un autre service.",
+    "networkRetry": "Erreur réseau. Veuillez réessayer."
   },
   "highlights": {
     "highlight_exact_match": "{player} a trouvé '{song}' pile — {year} !",
@@ -1131,7 +1174,13 @@
         "step3": "Reviens — ton {platform} apparaît comme une enceinte Music Assistant",
         "primary": "Configurer Music Assistant →",
         "ghost": "Choisir un autre service",
-        "footer": "Tu préfères Spotify ? Ça marche directement sur {platform} — pas besoin d'add-on."
+        "footer": "Tu préfères Spotify ? Ça marche directement sur {platform} — pas besoin d'add-on.",
+        "amazonTitle": "Amazon Music nécessite un Amazon Echo",
+        "amazonBody": "Amazon Music n'est pas disponible via Music Assistant. Pour l'utiliser, choisissez un Amazon Echo (via l'intégration alexa_media) comme enceinte.",
+        "amazonStep1": "Installez l'intégration <strong>Alexa Media Player</strong> dans Home Assistant",
+        "amazonStep2": "Reliez votre compte Amazon et votre Echo",
+        "amazonStep3": "Revenez ici : votre Echo apparaîtra comme enceinte disponible",
+        "amazonPrimary": "Configurer Alexa Media Player →"
       }
     },
     "step3": {
@@ -1152,15 +1201,16 @@
       "roundsCustomLabel": "manches (min. 10)",
       "roundsHint": "env. {min} min pour {rounds} manches",
       "autoAdvance": "Avance auto au reveal",
-      "autoAdvanceOff": "Désactivé",
       "language": "Langue des annonces",
       "easy": "Facile",
       "normal": "Normal",
       "hard": "Difficile",
       "modes": "Modes de jeu",
-      "difficultyHintEasy": "Indulgent : 10 pts pour l'année exacte, 5 pts à ±7 ans, 1 pt à ±10 ans.",
-      "difficultyHintNormal": "Équilibré : 10 pts pour l'année exacte, 5 pts à ±3 ans, 1 pt à ±5 ans.",
-      "difficultyHintHard": "Strict : 10 pts pour l'année exacte, 3 pts à ±2 ans, sinon 0.",
+      "difficultyBands": "{exact} pts pour l'année exacte, {close} pts à ±{closeRange} ans, {near} pt à ±{nearRange} ans",
+      "difficultyBandsNoNear": "{exact} pts pour l'année exacte, {close} pts à ±{closeRange} ans, sinon 0",
+      "difficultyHintEasy": "Indulgent : {bands}.",
+      "difficultyHintNormal": "Équilibré : {bands}.",
+      "difficultyHintHard": "Strict : {bands}.",
       "coreMode": "Mode de jeu",
       "modeYear": "Mode Année",
       "modeYearHint": "Devinez l'année de sortie de chaque morceau.",
@@ -1214,7 +1264,8 @@
         "presetCustom": "Personnalisé",
         "test": "Envoyer une annonce test",
         "testOk": "Envoyé",
-        "testFail": "Échec"
+        "testFail": "Échec",
+        "testNoSpeaker": "Choisissez d'abord une enceinte"
       }
     },
     "summary": {
@@ -1230,11 +1281,12 @@
       "title": "Configurez votre partie bibliothèque",
       "sub": "Scan runs in the background — you can keep going and finish setup while it works."
     },
-    "providerLibrarySub": "Votre bibliothèque Music Assistant personnelle"
+    "providerLibrarySub": "Votre bibliothèque Music Assistant personnelle",
+    "providerYtmusicFreeSub": "Nécessite le fournisseur ytmusic_free dans Music Assistant"
   },
   "onboarding": {
     "stepLabel": "Étape",
-    "stepOf": "sur 4",
+    "stepOf": "sur",
     "skip": "Ignorer le tour",
     "skipBtn": "Passer",
     "nextBtn": "Suivant",
@@ -1447,7 +1499,10 @@
       "copyJson": "Copier le JSON validé",
       "saveLocal": "Enregistrer localement (v1.1)",
       "copyResult": "Copier le résultat pour le LLM",
-      "close": "Fermer"
+      "close": "Fermer",
+      "captureIssue": "Suivre cet envoi",
+      "dismissSubmission": "Passer",
+      "working": "En cours…"
     },
     "hints": {
       "promptCopied": "Prompt copié dans le presse-papiers — collez-le dans votre LLM.",
@@ -1482,6 +1537,16 @@
       "step4": "Cliquez sur <b>Valider</b> — vous verrez ✓/✗ par champ.",
       "warnTitle": "Plus de ~32 titres ?",
       "warnBody": "ChatGPT &amp; Claude coupent souvent les grandes playlists en cours de route. Divisez-les en <b>lots de 30 titres</b> : exécutez le prompt par lot, puis fusionnez les tableaux songs. Si ChatGPT s’interrompt avec une erreur peu claire, c’est presque toujours la longueur de la réponse qui est en cause."
+    },
+    "saveLocal": {
+      "success": "Enregistrée sous {filename}. Elle apparaîtra dans Playlist Hub → Community au prochain rafraîchissement.",
+      "error": "Échec de l'enregistrement : {error}"
+    },
+    "submit": {
+      "pasteIssuePrompt": "Terminez le ticket sur GitHub, puis collez son URL ici : il apparaîtra dans votre onglet Mine avec vos demandes de playlist.",
+      "captured": "Enregistré comme ticket #{n}. Suivez l'avancement dans Playlist Hub → Mine.",
+      "captureError": "Impossible d'enregistrer l'envoi : {error}",
+      "invalidIssueUrl": "Cela ne ressemble pas à l'URL d'un ticket GitHub. Attendu : quelque chose comme https://github.com/mholzi/beatify/issues/123."
     }
   },
   "starting": {
